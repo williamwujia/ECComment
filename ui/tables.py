@@ -24,7 +24,7 @@ def show_table(frame: pd.DataFrame, columns: list[str] | None = None, height: in
     else:
         shown = frame.copy()
     shown = shown.rename(columns=rename_columns_for_display(list(shown.columns)))
-    st.dataframe(shown, use_container_width=True, height=height, hide_index=True)
+    st.dataframe(shown, width="stretch", height=height, hide_index=True)
     return shown
 
 

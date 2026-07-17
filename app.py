@@ -20,6 +20,7 @@ from ui.charts import (
 from ui.data_loader import (
     ExcelLoadError,
     apply_project_alias,
+    build_capture_quality_warnings,
     build_summary_by_keyword,
     build_summary_by_product,
     build_summary_by_month,
@@ -159,7 +160,7 @@ def load_workbook_from_sidebar():
     if output_files:
         default_path = str(default_file or output_files[0])
         st.sidebar.caption("output 分析项目")
-        with st.sidebar.popover("选择项目", use_container_width=True):
+        with st.sidebar.popover("选择项目", width="stretch"):
             st.caption("悬停项目名查看文件摘要，可多选合并分析。")
             for path in output_files:
                 path_text = str(path)
@@ -186,7 +187,7 @@ def load_workbook_from_sidebar():
                 value=aliases[edit_path],
                 key=f"project_alias_{hashlib.sha1(edit_path.encode('utf-8')).hexdigest()[:12]}",
             )
-            if st.button("保存别名", use_container_width=True):
+            if st.button("保存别名", width="stretch"):
                 save_project_alias(edit_path, edit_alias, "output")
                 st.cache_data.clear()
                 st.rerun()
@@ -256,13 +257,13 @@ def dashboard_page(content: pd.DataFrame, data: dict[str, pd.DataFrame]) -> None
     left, right = st.columns([1.1, 1])
     with left:
         st.subheader("评论筛选漏斗")
-        st.plotly_chart(funnel_chart(summary), use_container_width=True)
+        st.plotly_chart(funnel_chart(summary), width="stretch")
     with right:
         st.subheader("证据等级分布")
-        st.plotly_chart(evidence_bar(content), use_container_width=True)
+        st.plotly_chart(evidence_bar(content), width="stretch")
     st.subheader("商品 AI 候选 Top 10")
     product_summary = build_summary_by_product(content)
-    st.plotly_chart(product_rank_chart(product_summary, "ai_candidate_count"), use_container_width=True)
+    st.plotly_chart(product_rank_chart(product_summary, "ai_candidate_count"), width="stretch")
 
     sentiment = get_sentiment_joined(data)
     if not sentiment.empty:
@@ -278,9 +279,9 @@ def dashboard_page(content: pd.DataFrame, data: dict[str, pd.DataFrame]) -> None
         )
         left, right = st.columns([1, 1])
         with left:
-            st.plotly_chart(sentiment_distribution_chart(sentiment), use_container_width=True)
+            st.plotly_chart(sentiment_distribution_chart(sentiment), width="stretch")
         with right:
-            st.plotly_chart(sentiment_category_chart(sentiment, "complaint_cn", "主要吐槽"), use_container_width=True)
+            st.plotly_chart(sentiment_category_chart(sentiment, "complaint_cn", "主要吐槽"), width="stretch")
 
 
 def pre_purchase_page(frame: pd.DataFrame) -> None:
@@ -356,10 +357,10 @@ def product_summary_page(data: dict[str, pd.DataFrame], filtered_content: pd.Dat
     left, right = st.columns(2)
     with left:
         st.subheader("Top 10：AI 候选数")
-        st.plotly_chart(product_rank_chart(summary, "ai_candidate_count"), use_container_width=True)
+        st.plotly_chart(product_rank_chart(summary, "ai_candidate_count"), width="stretch")
     with right:
         st.subheader("Top 10：AI 候选 / 购前决策")
-        st.plotly_chart(product_rank_chart(summary, "ai_candidate_rate"), use_container_width=True)
+        st.plotly_chart(product_rank_chart(summary, "ai_candidate_rate"), width="stretch")
     download_csv(summary, "下载商品汇总 CSV", "summary_by_product", "product_csv")
     show_table(summary, height=520)
 
@@ -368,7 +369,7 @@ def keyword_summary_page(data: dict[str, pd.DataFrame], filtered_content: pd.Dat
     st.title("关键词汇总")
     summary = build_summary_by_keyword(filtered_content)
     summary = keyword_type_filter(summary, "keyword_type_filter")
-    st.plotly_chart(keyword_rank_chart(summary), use_container_width=True)
+    st.plotly_chart(keyword_rank_chart(summary), width="stretch")
     download_csv(summary, "下载关键词汇总 CSV", "summary_by_keyword", "keyword_csv")
     show_table(summary, height=520)
 
@@ -377,7 +378,7 @@ def month_summary_page(data: dict[str, pd.DataFrame], filtered_content: pd.DataF
     st.title("月份汇总")
     summary = build_summary_by_month(filtered_content)
     st.caption("按评论日期看趋势，帮助判断 AI 相关提及是否随时间增加。")
-    st.plotly_chart(monthly_trend_chart(summary), use_container_width=True)
+    st.plotly_chart(monthly_trend_chart(summary), width="stretch")
     download_csv(summary, "下载月份汇总 CSV", "summary_by_month", "month_csv")
     show_table(summary, height=520)
 
@@ -388,7 +389,7 @@ def sentiment_page(data: dict[str, pd.DataFrame], filters: dict) -> None:
     frame = apply_filters(get_sentiment_joined(data), filters)
     frame = sentiment_filter_controls(frame, "sentiment")
     render_sentiment_overview(data, frame)
-    st.plotly_chart(sentiment_category_chart(frame, "complaint_cn", "主要吐槽"), use_container_width=True)
+    st.plotly_chart(sentiment_category_chart(frame, "complaint_cn", "主要吐槽"), width="stretch")
     columns = [
         "content_id",
         "workbook_source",
@@ -452,10 +453,10 @@ def ai_sentiment_page(data: dict[str, pd.DataFrame], filters: dict) -> None:
     )
     left, right = st.columns(2)
     with left:
-        st.plotly_chart(sentiment_distribution_chart(frame), use_container_width=True)
+        st.plotly_chart(sentiment_distribution_chart(frame), width="stretch")
     with right:
-        st.plotly_chart(sentiment_category_chart(frame, "praise_cn", "主要夸法"), use_container_width=True)
-    st.plotly_chart(sentiment_category_chart(frame, "complaint_cn", "主要吐槽"), use_container_width=True)
+        st.plotly_chart(sentiment_category_chart(frame, "praise_cn", "主要夸法"), width="stretch")
+    st.plotly_chart(sentiment_category_chart(frame, "complaint_cn", "主要吐槽"), width="stretch")
     download_csv(frame, "下载 AI 相关情感 CSV", "ai_sentiment_filtered", "ai_sentiment_csv")
     show_table(
         frame,
@@ -500,18 +501,23 @@ def debug_page(data: dict[str, pd.DataFrame]) -> None:
             show_table(debug_samples, height=440)
     with tabs[2]:
         content = get_content_all(data)
+        capture_warnings = build_capture_quality_warnings(content)
+        if capture_warnings.empty:
+            st.success("未发现“评论极少、问大家很多”的明显页面保存不足提示。")
+        else:
+            st.warning(
+                "部分页面仅保存了少量评论预览卡片，但保存了大量问大家内容；"
+                "这通常是 SingleFile 保存前没有完整加载评论区。"
+            )
+            show_table(capture_warnings)
         if {"declared_review_count", "saved_comment_card_count"}.issubset(content.columns):
             risky = content[
                 pd.to_numeric(content["declared_review_count"], errors="coerce").fillna(0)
                 > pd.to_numeric(content["saved_comment_card_count"], errors="coerce").fillna(0) * 2
             ]
-            if risky.empty:
-                st.success("未发现明显京东可见评价保存不足提示。")
-            else:
+            if not risky.empty:
                 st.warning("部分京东页面只保存了当前可见或已渲染评价，不能代表完整评论池。")
                 show_table(risky)
-        else:
-            st.info("当前 Excel 没有 declared_review_count / saved_comment_card_count 字段。")
     with tabs[3]:
         if sentiment_run.empty:
             st.info("当前文件没有 sentiment_run_summary。")
@@ -568,9 +574,9 @@ def render_sentiment_overview(data: dict[str, pd.DataFrame], frame: pd.DataFrame
     )
     left, right = st.columns(2)
     with left:
-        st.plotly_chart(sentiment_distribution_chart(frame), use_container_width=True)
+        st.plotly_chart(sentiment_distribution_chart(frame), width="stretch")
     with right:
-        st.plotly_chart(sentiment_category_chart(frame, "praise_cn", "主要夸法"), use_container_width=True)
+        st.plotly_chart(sentiment_category_chart(frame, "praise_cn", "主要夸法"), width="stretch")
 
 
 def sentiment_filter_controls(frame: pd.DataFrame, key_prefix: str) -> pd.DataFrame:

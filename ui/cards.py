@@ -143,7 +143,7 @@ def detail_row(row: pd.Series | dict) -> None:
         if key not in data:
             continue
         rows[column_label(key)] = _source_name(data.get(key, "")) if key == "source_file" else data.get(key, "")
-    st.dataframe(pd.DataFrame([rows]), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame([rows]), width="stretch", hide_index=True)
 
 
 def report_case_text(row: pd.Series | dict) -> str:

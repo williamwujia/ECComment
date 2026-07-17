@@ -333,6 +333,51 @@ def get_content_all(data: dict[str, pd.DataFrame]) -> pd.DataFrame:
     return data.get("content_all", empty_frame("content_all"))
 
 
+def build_capture_quality_warnings(content: pd.DataFrame) -> pd.DataFrame:
+    """Flag source pages whose saved DOM likely contains only a review preview."""
+    columns = [
+        "source_file",
+        "product_title",
+        "platform",
+        "review_count",
+        "qa_question_count",
+        "qa_answer_count",
+        "quality_warning",
+        "recommended_action",
+    ]
+    required = {"source_file", "content_role"}
+    if content.empty or not required.issubset(content.columns):
+        return pd.DataFrame(columns=columns)
+
+    rows: list[dict] = []
+    grouped = content.assign(
+        content_role=content["content_role"].fillna("").astype(str)
+    ).groupby("source_file", dropna=False, sort=False)
+    for source_file, group in grouped:
+        roles = group["content_role"]
+        review_count = int((roles == "review").sum())
+        qa_question_count = int(roles.isin({"question", "qa_question"}).sum())
+        qa_answer_count = int(roles.isin({"answer", "qa_answer"}).sum())
+        qa_count = qa_question_count + qa_answer_count
+        if review_count > 2 or qa_count < 10:
+            continue
+
+        first = group.iloc[0]
+        rows.append(
+            {
+                "source_file": source_file,
+                "product_title": first.get("product_title", ""),
+                "platform": first.get("platform", ""),
+                "review_count": review_count,
+                "qa_question_count": qa_question_count,
+                "qa_answer_count": qa_answer_count,
+                "quality_warning": "评论区可能只保存了当前可见的预览卡片",
+                "recommended_action": "重新打开商品评价区并滚动加载后，再用 SingleFile 保存页面。",
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
 def get_pre_purchase(data: dict[str, pd.DataFrame]) -> pd.DataFrame:
     details = data.get("pre_purchase_details", empty_frame("pre_purchase_details"))
     if not details.empty:

@@ -21,6 +21,7 @@ from ui.source_display import source_file_name
 from ui.data_loader import (
     ExcelLoadError,
     WorkbookInfo,
+    build_capture_quality_warnings,
     build_summary_by_keyword,
     build_summary_by_month,
     build_summary_by_product,
@@ -44,6 +45,56 @@ META = {
 
 
 class CoreTests(unittest.TestCase):
+    def test_capture_quality_warning_flags_review_preview_with_large_qa_section(self):
+        content = pd.DataFrame(
+            [
+                {
+                    "source_file": "preview.html",
+                    "product_title": "测试商品",
+                    "platform": "tmall",
+                    "content_role": role,
+                }
+                for role in ["review", "review"] + ["question"] * 10 + ["answer"] * 10
+            ]
+        )
+
+        warnings = build_capture_quality_warnings(content)
+
+        self.assertEqual(len(warnings), 1)
+        self.assertEqual(warnings.iloc[0]["review_count"], 2)
+        self.assertEqual(warnings.iloc[0]["qa_question_count"], 10)
+        self.assertEqual(warnings.iloc[0]["qa_answer_count"], 10)
+
+    def test_capture_quality_warning_ignores_normal_review_capture(self):
+        content = pd.DataFrame(
+            [
+                {
+                    "source_file": "complete.html",
+                    "product_title": "测试商品",
+                    "platform": "tmall",
+                    "content_role": role,
+                }
+                for role in ["review"] * 3 + ["qa_question"] * 20
+            ]
+        )
+
+        self.assertTrue(build_capture_quality_warnings(content).empty)
+
+    def test_capture_quality_warning_ignores_tiny_qa_sample(self):
+        content = pd.DataFrame(
+            [
+                {
+                    "source_file": "small-sample.html",
+                    "product_title": "测试商品",
+                    "platform": "tmall",
+                    "content_role": role,
+                }
+                for role in ["review", "review"] + ["question"] * 4 + ["answer"] * 4
+            ]
+        )
+
+        self.assertTrue(build_capture_quality_warnings(content).empty)
+
     def test_product_title_prefers_tmall_sku_panel_title(self):
         html = """
         <html>
