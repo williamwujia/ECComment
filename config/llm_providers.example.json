@@ -1,0 +1,25 @@
+{
+  "default_provider": "deepseek",
+  "providers": {
+    "deepseek": {
+      "api_key_file": "config/secrets/deepseek_api_key.txt",
+      "base_url": "https://api.deepseek.com",
+      "default_model": "deepseek-v4-flash",
+      "default_batch_size": 50,
+      "timeout_seconds": 90,
+      "target_content_count": 500,
+      "target_total_seconds": 120,
+      "capacity_note": "DeepSeek window calibrated for the end-to-end UX target: process about 500 content rows within 120 seconds, including request transfer, model generation, response parsing, validation, error handling, and workbook writing."
+    },
+    "openai_compatible_example": {
+      "api_key_file": "config/secrets/openai_compatible_api_key.txt",
+      "base_url": "https://example.com/v1",
+      "default_model": "example-model",
+      "default_batch_size": 1,
+      "timeout_seconds": 90,
+      "target_content_count": 500,
+      "target_total_seconds": 120,
+      "capacity_note": "Replace this with the calibrated window for this provider/model."
+    }
+  }
+}
