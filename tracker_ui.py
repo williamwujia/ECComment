@@ -31,8 +31,11 @@ from ui.tracker_metrics import (
 )
 
 
-st.set_page_config(page_title="消费者反馈洞察", layout="wide")
-inject_css()
+if __name__ == "__main__":
+    # Direct `streamlit run tracker_ui.py` remains supported. When app.py is
+    # the entry point, it configures every session before importing this module.
+    st.set_page_config(page_title="消费者反馈洞察", layout="wide")
+    inject_css()
 
 BRAND_PAGES = [
     "品牌总览",

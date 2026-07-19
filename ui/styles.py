@@ -10,19 +10,35 @@ LEVEL_CLASS = {"A": "badge-a", "B": "badge-b", "C": "badge-c", "D": "badge-d", "
 
 
 def inject_css() -> None:
-    st.markdown(
-        """
+    markup = """
         <style>
-        /* Keep the dashboard fluid instead of inheriting Streamlit's fixed
-           content-width ceiling. Both selectors are intentionally used for
-           compatibility across Streamlit versions. */
+        /* Streamlit 1.58 defaults the actual content column to 736px.
+           Make the whole main layout fluid, not just its outer shell. */
+        [data-testid="stMain"] {
+            width: 100%;
+            align-items: stretch;
+        }
+
         [data-testid="stMainBlockContainer"],
         .block-container {
             box-sizing: border-box;
             width: 100%;
+            min-width: 0;
             max-width: none !important;
+            align-self: stretch;
+            flex: 1 1 auto;
+            margin-left: 0;
+            margin-right: 0;
             padding: 2rem clamp(1rem, 2.5vw, 3rem) 2.5rem;
         }
+
+        [data-testid="stMainBlockContainer"] > [data-testid="stVerticalBlock"],
+        .block-container > [data-testid="stVerticalBlock"] {
+            width: 100%;
+            min-width: 0;
+            max-width: none !important;
+        }
+
         [data-testid="stSidebar"] {background: #f8fafc;}
         h1, h2, h3 {letter-spacing: 0;}
         .muted {color:#64748b; font-size: 13px;}
@@ -50,9 +66,11 @@ def inject_css() -> None:
         @media (max-width: 900px) {.metric-grid {grid-template-columns: repeat(2, minmax(0, 1fr));}}
         @media (max-width: 560px) {.metric-grid {grid-template-columns: 1fr;}}
         </style>
-        """,
-        unsafe_allow_html=True,
-    )
+        """
+    if hasattr(st, "html"):
+        st.html(markup)
+    else:
+        st.markdown(markup, unsafe_allow_html=True)
 
 
 def esc(value: object) -> str:
