@@ -28,7 +28,8 @@ def select_sentiment_targets(contents: list[dict], limit: int | None = None) -> 
     targets = [
         row
         for row in contents
-        if row.get("content_role") == "review" and str(row.get("content_text_clean") or "").strip()
+        if row.get("content_role") in {"review", "followup"}
+        and str(row.get("content_text_clean") or "").strip()
     ]
     if limit is not None:
         targets = targets[: max(limit, 0)]

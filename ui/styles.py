@@ -13,7 +13,16 @@ def inject_css() -> None:
     st.markdown(
         """
         <style>
-        .block-container {padding-top: 2rem; padding-bottom: 2.5rem; max-width: 1320px;}
+        /* Keep the dashboard fluid instead of inheriting Streamlit's fixed
+           content-width ceiling. Both selectors are intentionally used for
+           compatibility across Streamlit versions. */
+        [data-testid="stMainBlockContainer"],
+        .block-container {
+            box-sizing: border-box;
+            width: 100%;
+            max-width: none !important;
+            padding: 2rem clamp(1rem, 2.5vw, 3rem) 2.5rem;
+        }
         [data-testid="stSidebar"] {background: #f8fafc;}
         h1, h2, h3 {letter-spacing: 0;}
         .muted {color:#64748b; font-size: 13px;}

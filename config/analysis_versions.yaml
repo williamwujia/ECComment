@@ -1,0 +1,12 @@
+workbook_version: "2.0"
+parser_version: "tracker_v2"
+modules:
+  ai_candidate:
+    version: "ai_rules_v1.4"
+    method: "local_rules"
+  sentiment:
+    version: "sentiment_fast_v1"
+    method: "local_rules_then_llm"
+  topic:
+    version: ""
+    method: "disabled_in_incremental_mvp"

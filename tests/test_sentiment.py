@@ -76,10 +76,11 @@ class SentimentTests(unittest.TestCase):
     def test_select_sentiment_targets_only_reviews_with_text_and_limit(self):
         rows = [
             {"content_id": 1, "content_role": "review", "content_text_clean": "很好"},
+            {"content_id": 4, "content_role": "followup", "content_text_clean": "追评也不错"},
             {"content_id": 2, "content_role": "question", "content_text_clean": "哪个好"},
             {"content_id": 3, "content_role": "review", "content_text_clean": " "},
         ]
-        self.assertEqual(select_sentiment_targets(rows, limit=2), rows[:1])
+        self.assertEqual(select_sentiment_targets(rows, limit=2), rows[:2])
 
 
 if __name__ == "__main__":
