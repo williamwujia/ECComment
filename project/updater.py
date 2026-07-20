@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import shutil
 import tempfile
 import uuid
@@ -37,6 +38,14 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_KEYWORDS = ROOT / "config" / "ai_keywords.yaml"
 DEFAULT_LLM_CONFIG = ROOT / "config" / "llm_providers.local.json"
 SENTIMENT_VERSION = "sentiment_fast_v1"
+WINDOWS_RESERVED_NAMES = {
+    "CON",
+    "PRN",
+    "AUX",
+    "NUL",
+    *(f"COM{index}" for index in range(1, 10)),
+    *(f"LPT{index}" for index in range(1, 10)),
+}
 
 
 def _now() -> str:
@@ -102,6 +111,38 @@ def create_project(
     )
     rebuild_compatibility_sheets_from_frames(sheets, project_id)
     write_sheets_atomic(path, sheets, create_backup=False)
+
+
+def create_named_project(
+    projects_dir: str | Path,
+    project_name: str,
+    objective: str = "",
+    *,
+    project_id: str | None = None,
+) -> Path:
+    """Create a project workbook with a safe, user-facing file name."""
+    name = project_name.strip()
+    if not name:
+        raise ValueError("项目名称不能为空")
+    directory = Path(projects_dir).expanduser().resolve()
+    workbook_path = directory / f"{project_filename_stem(name)}.xlsx"
+    if workbook_path.exists():
+        raise FileExistsError(f"已存在同名项目：{name}")
+    identifier = (project_id or f"project_{uuid.uuid4().hex[:12]}").strip()
+    create_project(str(workbook_path), identifier, name, objective)
+    return workbook_path
+
+
+def project_filename_stem(project_name: str, max_length: int = 80) -> str:
+    """Return a Windows-safe workbook stem while preserving readable Chinese."""
+    stem = re.sub(r'[<>:"/\\|?*\x00-\x1f]', " ", project_name)
+    stem = re.sub(r"\s+", " ", stem).strip(" .")
+    stem = stem[:max_length].rstrip(" .")
+    if not stem:
+        raise ValueError("项目名称不能只包含文件名非法字符")
+    if stem.upper() in WINDOWS_RESERVED_NAMES:
+        stem = f"{stem}_项目"
+    return stem
 
 
 def register_product(
@@ -299,6 +340,7 @@ def update_project_item(
     sentiment_model: str | None = None,
     sentiment_batch_size: int = 50,
     sentiment_detail_limit: int | None = 50,
+    sentiment_full_llm: bool = True,
     sentiment_client=None,
 ) -> dict:
     sheets = load_sheets(workbook_path)
@@ -346,6 +388,9 @@ def update_project_item(
             "sentiment_status": "not_run_duplicate",
             "sentiment_model": sentiment_model or "",
             "sentiment_version": SENTIMENT_VERSION,
+            "sentiment_strategy": (
+                "full_llm" if sentiment_full_llm else "rules_then_llm"
+            ),
             "result": "warning",
             "message": "相同快照已导入，内容主表未变",
             "dry_run": dry_run,
@@ -435,7 +480,7 @@ def update_project_item(
         "boundary_confidence": boundary["confidence"],
         "sentiment_enabled": enable_sentiment,
         "sentiment_target_count": sum(
-            row.get("content_role") == "review"
+            row.get("content_role") in {"review", "followup"}
             and bool(str(row.get("content_text_clean") or "").strip())
             for row in comparison["new"]
         ),
@@ -448,6 +493,9 @@ def update_project_item(
         ),
         "sentiment_model": sentiment_model or "",
         "sentiment_version": SENTIMENT_VERSION,
+        "sentiment_strategy": (
+            "full_llm" if sentiment_full_llm else "rules_then_llm"
+        ),
         "result": "warning" if boundary["status"] == "fallback" or comparison["uncertain"] else "success",
         "message": _result_message(boundary["status"], comparison, is_backfill),
         "dry_run": dry_run,
@@ -490,6 +538,7 @@ def update_project_item(
         model=sentiment_model,
         batch_size=sentiment_batch_size,
         detail_limit=sentiment_detail_limit,
+        full_llm=sentiment_full_llm,
         client=sentiment_client,
     )
     apply_sentiment_to_analysis(
@@ -507,6 +556,7 @@ def update_project_item(
             "sentiment_status": sentiment_run["status"],
             "sentiment_model": sentiment_run["model"],
             "sentiment_version": SENTIMENT_VERSION,
+            "sentiment_strategy": sentiment_run["strategy"],
         }
     )
     if sentiment_run["status"] in {"partial", "failed_to_start"}:
@@ -657,6 +707,7 @@ def run_incremental_sentiment(
     model: str | None,
     batch_size: int,
     detail_limit: int | None,
+    full_llm: bool = True,
     client=None,
 ) -> dict:
     analyzed_at = _now()
@@ -683,6 +734,7 @@ def run_incremental_sentiment(
     targets = select_sentiment_targets(prepared)
     pipeline = SentimentPipelineResult(total_count=len(targets))
     selected_model = model or ""
+    strategy = "full_llm" if full_llm else "rules_then_llm"
     status = "disabled"
     message = "情绪判断已关闭"
 
@@ -697,6 +749,7 @@ def run_incremental_sentiment(
             batch_size=max(int(batch_size or 1), 1),
             detail_limit=detail_limit,
             dry_run=True,
+            use_local_rules=not full_llm,
         )
         try:
             if client is None:
@@ -731,17 +784,21 @@ def run_incremental_sentiment(
                 batch_size=max(int(batch_size or 1), 1),
                 detail_limit=detail_limit,
                 dry_run=False,
+                use_local_rules=not full_llm,
             )
             status = "success" if pipeline.failed_count == 0 else "partial"
             message = (
-                f"目标 {pipeline.total_count}；规则 {pipeline.rule_count}；"
+                f"策略 {strategy}；目标 {pipeline.total_count}；"
+                f"规则 {pipeline.rule_count}；"
                 f"LLM 快判 {pipeline.llm_fast_count}；详析 {pipeline.detail_count}；"
                 f"失败 {pipeline.failed_count}"
             )
         except Exception as exc:
             pipeline = rule_preview
             llm_needed = [
-                row for row in targets if try_rule_sentiment(row) is None
+                row
+                for row in targets
+                if full_llm or try_rule_sentiment(row) is None
             ]
             pipeline.failure_rows.extend(
                 {
@@ -775,6 +832,7 @@ def run_incremental_sentiment(
         "provider": provider,
         "model": selected_model,
         "sentiment_version": SENTIMENT_VERSION,
+        "sentiment_strategy": strategy,
         "batch_size": batch_size,
         "detail_limit": "" if detail_limit is None else detail_limit,
         "elapsed_seconds": pipeline.elapsed_seconds,
@@ -785,6 +843,7 @@ def run_incremental_sentiment(
         "status": status,
         "message": message,
         "model": selected_model,
+        "strategy": strategy,
         "analyzed_at": analyzed_at,
         "run_summary": run_summary,
     }
@@ -973,6 +1032,7 @@ def backfill_project_sentiment(
     detail_limit: int | None = 50,
     limit: int | None = None,
     dry_run: bool = False,
+    full_llm: bool = True,
     client=None,
 ) -> dict:
     """Classify project reviews that do not yet have a fast sentiment result."""
@@ -1021,8 +1081,10 @@ def backfill_project_sentiment(
         candidates = candidates.head(max(int(limit), 0))
 
     rows = _records(candidates)
-    rule_target_count = sum(
-        try_rule_sentiment(row) is not None for row in rows
+    rule_target_count = (
+        0
+        if full_llm
+        else sum(try_rule_sentiment(row) is not None for row in rows)
     )
     preview = {
         "project_id": project_id,
@@ -1030,6 +1092,9 @@ def backfill_project_sentiment(
         "already_completed_count": len(completed_ids),
         "rule_target_count": rule_target_count,
         "llm_target_count": len(rows) - rule_target_count,
+        "sentiment_strategy": (
+            "full_llm" if full_llm else "rules_then_llm"
+        ),
         "dry_run": dry_run,
     }
     if dry_run or not rows:
@@ -1092,6 +1157,7 @@ def backfill_project_sentiment(
             model=model,
             batch_size=batch_size,
             detail_limit=current_detail_limit,
+            full_llm=full_llm,
             client=client,
         )
         pipeline = sentiment_run["pipeline"]
@@ -1428,6 +1494,10 @@ def _append_update_log(sheets: dict[str, pd.DataFrame], result: dict) -> None:
         "sentiment_status": result.get("sentiment_status", "disabled"),
         "sentiment_model": result.get("sentiment_model", ""),
         "sentiment_version": result.get("sentiment_version", ""),
+        "sentiment_strategy": result.get(
+            "sentiment_strategy",
+            "full_llm",
+        ),
         "result": result.get("result", "success"),
         "message": result.get("message", ""),
     }

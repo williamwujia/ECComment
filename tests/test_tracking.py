@@ -11,7 +11,9 @@ from matching.content_identity import build_identity_keys
 from matching.overlap_detector import detect_overlap_boundary
 from project.updater import (
     backfill_project_sentiment,
+    create_named_project,
     create_project,
+    project_filename_stem,
     reanalyze_project,
     register_product,
     update_project_files,
@@ -104,6 +106,43 @@ class FakeTrackingSentimentClient:
 
 
 class TrackingTests(unittest.TestCase):
+    def test_create_named_project_uses_safe_readable_filename(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workbook = create_named_project(
+                temp_dir,
+                " 测试 / 项目? ",
+                "追踪评论变化",
+                project_id="p1",
+            )
+
+            self.assertEqual(workbook.name, "测试 项目.xlsx")
+            project_info = pd.read_excel(
+                workbook,
+                sheet_name="project_info",
+                dtype=str,
+            )
+            self.assertEqual(project_info.iloc[0]["project_id"], "p1")
+            self.assertEqual(project_info.iloc[0]["project_name"], "测试 / 项目?")
+            self.assertEqual(project_info.iloc[0]["objective"], "追踪评论变化")
+
+    def test_create_named_project_rejects_duplicate_name(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            create_named_project(
+                temp_dir,
+                "测试项目",
+                project_id="p1",
+            )
+
+            with self.assertRaisesRegex(FileExistsError, "已存在同名项目"):
+                create_named_project(
+                    temp_dir,
+                    "测试项目",
+                    project_id="p2",
+                )
+
+    def test_project_filename_stem_handles_windows_reserved_name(self):
+        self.assertEqual(project_filename_stem("CON"), "CON_项目")
+
     def test_overlap_requires_contiguous_sequence(self):
         old = [_keyed(value) for value in ["A", "B", "C", "D", "E"]]
         new = [_keyed(value) for value in ["X", "Y", "Z", "A", "B", "C"]]
@@ -338,17 +377,22 @@ class TrackingTests(unittest.TestCase):
             analysis = pd.read_excel(workbook, sheet_name="analysis")
             update_log = pd.read_excel(workbook, sheet_name="update_log")
             self.assertEqual(result["sentiment_status"], "success")
-            self.assertEqual(result["sentiment_rule_count"], 1)
-            self.assertEqual(result["sentiment_llm_count"], 1)
+            self.assertEqual(result["sentiment_rule_count"], 0)
+            self.assertEqual(result["sentiment_llm_count"], 2)
+            self.assertEqual(result["sentiment_strategy"], "full_llm")
             self.assertEqual(len(sentiment), 2)
-            self.assertEqual(len(detail), 1)
-            self.assertEqual(set(analysis["sentiment"]), {"P", "M"})
+            self.assertEqual(len(detail), 2)
+            self.assertEqual(set(analysis["sentiment"]), {"M"})
             self.assertEqual(update_log.iloc[0]["sentiment_status"], "success")
+            self.assertEqual(
+                update_log.iloc[0]["sentiment_strategy"],
+                "full_llm",
+            )
             self.assertGreaterEqual(len(client.calls), 2)
 
             reanalyze_project(str(workbook), "p1")
             reanalyzed = pd.read_excel(workbook, sheet_name="analysis")
-            self.assertEqual(set(reanalyzed["sentiment"]), {"P", "M"})
+            self.assertEqual(set(reanalyzed["sentiment"]), {"M"})
 
     def test_backfill_sentiment_only_processes_missing_reviews(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -399,11 +443,14 @@ class TrackingTests(unittest.TestCase):
             )
             analysis = pd.read_excel(workbook, sheet_name="analysis")
             self.assertEqual(preview["candidate_count"], 2)
+            self.assertEqual(preview["rule_target_count"], 0)
+            self.assertEqual(preview["llm_target_count"], 2)
+            self.assertEqual(preview["sentiment_strategy"], "full_llm")
             self.assertEqual(result["status"], "success")
-            self.assertEqual(result["rule_count"], 1)
-            self.assertEqual(result["llm_count"], 1)
+            self.assertEqual(result["rule_count"], 0)
+            self.assertEqual(result["llm_count"], 2)
             self.assertEqual(len(sentiment), 2)
-            self.assertEqual(set(analysis["sentiment"]), {"P", "M"})
+            self.assertEqual(set(analysis["sentiment"]), {"M"})
             self.assertEqual(repeated["status"], "nothing_to_do")
             self.assertEqual(repeated["candidate_count"], 0)
 

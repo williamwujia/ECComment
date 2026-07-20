@@ -44,6 +44,7 @@ def process_sentiment_for_comments(
     detail_batch_size: int = 10,
     detail_limit: int | None = 50,
     dry_run: bool = False,
+    use_local_rules: bool = False,
 ) -> SentimentPipelineResult:
     started_at = time.perf_counter()
     result = SentimentPipelineResult(total_count=len(comments))
@@ -51,7 +52,9 @@ def process_sentiment_for_comments(
     rule_rows = []
     llm_needed = []
     for comment in comments:
-        rule_result = try_rule_sentiment(comment)
+        rule_result = (
+            try_rule_sentiment(comment) if use_local_rules else None
+        )
         if rule_result:
             rule_rows.append(_row_from_fast_result(comment, rule_result))
         else:

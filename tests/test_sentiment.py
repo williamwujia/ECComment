@@ -58,6 +58,7 @@ class SentimentTests(unittest.TestCase):
             model_name="deepseek-v4-flash",
             batch_size=50,
             detail_limit=1,
+            use_local_rules=True,
         )
         self.assertEqual(result.total_count, 3)
         self.assertEqual(result.rule_count, 1)

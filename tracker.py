@@ -56,6 +56,15 @@ def build_parser() -> argparse.ArgumentParser:
     update.add_argument("--sentiment-model")
     update.add_argument("--sentiment-batch-size", type=int, default=50)
     update.add_argument("--sentiment-detail-limit", type=int, default=50)
+    update.add_argument(
+        "--sentiment-full-llm",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "全部新增评论进入 LLM 快判，默认开启；"
+            "使用 --no-sentiment-full-llm 可改为本地规则优先"
+        ),
+    )
 
     reanalyze = commands.add_parser("reanalyze", help="不重新解析 HTML，重算分析结果")
     reanalyze.add_argument("--workbook", required=True)
@@ -81,6 +90,11 @@ def build_parser() -> argparse.ArgumentParser:
     backfill.add_argument("--detail-limit", type=int, default=50)
     backfill.add_argument("--limit", type=int)
     backfill.add_argument("--dry-run", action="store_true")
+    backfill.add_argument(
+        "--full-llm",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
     return parser
 
 
@@ -113,6 +127,7 @@ def main(argv: list[str] | None = None) -> int:
                 sentiment_model=args.sentiment_model,
                 sentiment_batch_size=args.sentiment_batch_size,
                 sentiment_detail_limit=args.sentiment_detail_limit,
+                sentiment_full_llm=args.sentiment_full_llm,
             )
             result = {
                 "result": "failed"
@@ -152,6 +167,7 @@ def main(argv: list[str] | None = None) -> int:
                 detail_limit=args.detail_limit,
                 limit=args.limit,
                 dry_run=args.dry_run,
+                full_llm=args.full_llm,
             )
     except Exception as exc:
         print(json.dumps({"result": "failed", "error": str(exc)}, ensure_ascii=False))

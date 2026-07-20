@@ -7,7 +7,11 @@ import pandas as pd
 import plotly.express as px
 import streamlit as st
 
-from project.updater import create_project, update_project_files
+from project.updater import (
+    create_named_project,
+    create_project,
+    update_project_files,
+)
 from project.workbook import load_sheets
 from ui.charts import (
     evidence_bar,
@@ -55,6 +59,9 @@ MAINTENANCE_PAGES = [
     "扩展分析",
     "维护说明",
 ]
+NEW_PROJECT_OPTION = "__new_project__"
+MANUAL_WORKBOOK_OPTION = "__manual_workbook__"
+PROJECTS_DIRECTORY = Path("projects")
 
 
 @st.cache_data(show_spinner=False)
@@ -82,6 +89,11 @@ def main() -> None:
             st.info("目前还没有可查看的品牌项目，请联系维护者添加。")
         return
 
+    if workbook == NEW_PROJECT_OPTION:
+        st.title("新建项目")
+        render_create_project()
+        return
+
     workbook_path = Path(workbook).expanduser()
     if not workbook_path.exists():
         if maintenance:
@@ -99,6 +111,10 @@ def main() -> None:
     except Exception as exc:
         st.error(f"无法读取持续追踪工作簿：{exc}")
         return
+
+    created_message = st.session_state.pop("project_created_message", "")
+    if created_message:
+        st.success(created_message)
 
     project_ids = (
         sheets["project_info"]["project_id"].fillna("").astype(str).tolist()
@@ -161,27 +177,69 @@ def workbook_picker(*, maintenance: bool) -> str:
                 [str(path) for path in candidates],
                 format_func=lambda value: Path(value).stem,
             )
-        if candidates:
-            labels = ["手动输入路径"] + [str(path) for path in candidates]
-            selected = st.selectbox(
-                "维护项目",
-                labels,
-                index=1,
-                format_func=lambda value: (
-                    value
-                    if value == "手动输入路径"
-                    else Path(value).stem
-                ),
-            )
-        else:
-            selected = "手动输入路径"
-        default_path = str(
-            (Path("projects") / "consumer_evidence.xlsx").resolve()
+        options = (
+            [NEW_PROJECT_OPTION]
+            + [str(path) for path in candidates]
+            + [MANUAL_WORKBOOK_OPTION]
         )
-        if selected == "手动输入路径":
+        preferred = st.session_state.pop(
+            "select_workbook_after_create",
+            None,
+        )
+        preferred_option = matching_workbook_option(preferred, options)
+        if preferred_option:
+            st.session_state["maintenance_project_selector"] = (
+                preferred_option
+            )
+        selector_index = (
+            None
+            if "maintenance_project_selector" in st.session_state
+            else (1 if candidates else 0)
+        )
+        selected = st.selectbox(
+            "维护项目",
+            options,
+            index=selector_index,
+            key="maintenance_project_selector",
+            format_func=workbook_option_label,
+        )
+        if selected is None:
+            return ""
+        if selected == NEW_PROJECT_OPTION:
+            st.caption("创建一个新的持续追踪项目")
+            return NEW_PROJECT_OPTION
+        default_path = str(
+            (PROJECTS_DIRECTORY / "consumer_evidence.xlsx").resolve()
+        )
+        if selected == MANUAL_WORKBOOK_OPTION:
             return st.text_input("工作簿路径", value=default_path).strip()
         st.caption(str(Path(selected).resolve()))
         return selected
+
+
+def workbook_option_label(value: str) -> str:
+    if value == NEW_PROJECT_OPTION:
+        return "＋ 新建项目"
+    if value == MANUAL_WORKBOOK_OPTION:
+        return "手动输入工作簿"
+    return Path(value).stem
+
+
+def matching_workbook_option(
+    preferred: str | None,
+    options: list[str],
+) -> str | None:
+    if not preferred:
+        return None
+    if preferred in options:
+        return preferred
+    preferred_path = Path(preferred).expanduser().resolve()
+    for option in options:
+        if option in {NEW_PROJECT_OPTION, MANUAL_WORKBOOK_OPTION}:
+            continue
+        if Path(option).expanduser().resolve() == preferred_path:
+            return option
+    return None
 
 
 def project_display_name(
@@ -211,20 +269,60 @@ def discover_project_workbooks(root: str | Path = "projects") -> list[Path]:
     )
 
 
-def render_create_project(workbook: str) -> None:
-    st.info("该工作簿尚不存在，可以在这里创建新项目。")
+def render_create_project(workbook: str | None = None) -> None:
+    managed_path = workbook is None
+    if managed_path:
+        st.caption("创建后会生成独立项目文件，并自动切换到该项目。")
+    else:
+        st.info("该工作簿尚不存在，可以在这里创建新项目。")
     with st.form("create_project"):
-        project_id = st.text_input("项目 ID")
-        project_name = st.text_input("项目名称")
-        objective = st.text_area("项目目标")
-        submitted = st.form_submit_button("创建项目")
+        project_name = st.text_input(
+            "项目名称",
+            placeholder="例如：空气净化器消费者反馈",
+        )
+        objective = st.text_area(
+            "项目目标（可选）",
+            placeholder="例如：持续追踪重点型号的评论变化与 AI 影响",
+        )
+        project_id = (
+            ""
+            if managed_path
+            else st.text_input(
+                "项目 ID",
+                help="用于数据关联，创建后不建议修改。",
+            )
+        )
+        submitted = st.form_submit_button(
+            "创建项目",
+            type="primary",
+            width="stretch",
+        )
     if submitted:
         try:
-            create_project(workbook, project_id, project_name, objective)
+            if managed_path:
+                created_path = create_named_project(
+                    PROJECTS_DIRECTORY,
+                    project_name,
+                    objective,
+                )
+            else:
+                create_project(
+                    str(workbook),
+                    project_id,
+                    project_name,
+                    objective,
+                )
+                created_path = Path(str(workbook)).expanduser().resolve()
         except Exception as exc:
             st.error(str(exc))
         else:
-            st.success("项目已创建。")
+            cached_load_sheets.clear()
+            st.session_state["select_workbook_after_create"] = str(
+                created_path
+            )
+            st.session_state["project_created_message"] = (
+                f"项目“{project_name.strip()}”已创建，可以开始上传页面。"
+            )
             st.rerun()
 
 
@@ -1049,10 +1147,23 @@ def render_update_form(
             "启用 LLM 情绪判断",
             value=True,
             help=(
-                "先用本地规则处理简单评论，其余新增评论提交给已配置的 "
-                "DeepSeek。预览阶段不会调用模型。"
+                "正式确认写入后，对本次新增评论执行情绪判断。"
+                "预览阶段不会调用模型。"
             ),
         )
+        sentiment_strategy = st.selectbox(
+            "情绪判断策略",
+            [
+                "全量 LLM（默认）",
+                "本地规则优先（节省调用）",
+            ],
+            disabled=not enable_sentiment,
+            help=(
+                "全量 LLM 会把每条新增评论和追评都提交给 DeepSeek 快判；"
+                "详析仍只处理符合条件的高价值评论。"
+            ),
+        )
+        sentiment_full_llm = sentiment_strategy.startswith("全量 LLM")
         sentiment_detail_limit = st.number_input(
             "情绪详析上限",
             min_value=0,
@@ -1086,6 +1197,7 @@ def render_update_form(
                     capture_time=capture_time or None,
                     brand_product_id=brand_product_id or None,
                     enable_sentiment=enable_sentiment,
+                    sentiment_full_llm=sentiment_full_llm,
                     sentiment_detail_limit=int(sentiment_detail_limit),
                     dry_run=True,
                 )
@@ -1102,6 +1214,7 @@ def render_update_form(
                     "capture_time": capture_time or None,
                     "brand_product_id": brand_product_id or None,
                     "enable_sentiment": enable_sentiment,
+                    "sentiment_full_llm": sentiment_full_llm,
                     "sentiment_detail_limit": int(sentiment_detail_limit),
                 }
 
@@ -1129,6 +1242,7 @@ def render_update_form(
             capture_time=payload["capture_time"],
             brand_product_id=payload["brand_product_id"],
             enable_sentiment=payload["enable_sentiment"],
+            sentiment_full_llm=payload.get("sentiment_full_llm", True),
             sentiment_detail_limit=payload["sentiment_detail_limit"],
             dry_run=False,
         )
@@ -1141,7 +1255,9 @@ def render_update_form(
             f"新增内容 "
             f"{sum(int(item.get('new_count') or 0) for item in succeeded)} 条；"
             f"情绪判断 "
-            f"{sum(int(item.get('sentiment_rule_count') or 0) + int(item.get('sentiment_llm_count') or 0) for item in succeeded)} 条。"
+            f"{sum(int(item.get('sentiment_rule_count') or 0) + int(item.get('sentiment_llm_count') or 0) for item in succeeded)} 条，"
+            f"其中 LLM 快判 "
+            f"{sum(int(item.get('sentiment_llm_count') or 0) for item in succeeded)} 条。"
         )
         for item in succeeded:
             if item.get("sentiment_status") not in {
@@ -1491,7 +1607,7 @@ def render_usage_guide() -> None:
 1. 进入“数据更新”，一次选择一个或多个 SingleFile 页面。
 2. 商品 ID 从每个页面自动读取；页面没有商品 ID 时会报错，不会写入。
 3. 点击“检查更新”查看新增、重复、待确认和边界状态；预览不会调用 LLM。
-4. 点击“确认写入”后才更新工作簿，并默认对本次新增评论执行情绪判断。
+4. 点击“确认写入”后才更新工作簿，并默认把每条新增评论和追评提交给 LLM 快判。
 5. 已存在评论不会在普通更新中重复调用模型。
 
 ### 维护页面
@@ -1776,6 +1892,7 @@ def preview_rows(preview: list[dict]) -> list[dict]:
             "边界状态": item.get("boundary_status", ""),
             "连续重叠": item.get("overlap_length", ""),
             "情绪目标": item.get("sentiment_target_count", 0),
+            "情绪策略": item.get("sentiment_strategy", ""),
             "情绪状态": item.get("sentiment_status", ""),
             "结果": item.get("result", ""),
             "错误": item.get("error", ""),
