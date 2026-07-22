@@ -1,14 +1,16 @@
 let queue = [];
 let collected = [];
 let workerTabId = null;
+let outcomes = [];
 let hydrated = false;
 
 async function hydrateState() {
   if (hydrated) return;
-  const saved = await chrome.storage.local.get(['jdQueue', 'jdCollected', 'jdWorkerTabId']);
+  const saved = await chrome.storage.local.get(['jdQueue', 'jdCollected', 'jdWorkerTabId', 'jdOutcomes']);
   queue = Array.isArray(saved.jdQueue) ? saved.jdQueue : [];
   collected = Array.isArray(saved.jdCollected) ? saved.jdCollected : [];
   workerTabId = Number.isInteger(saved.jdWorkerTabId) ? saved.jdWorkerTabId : null;
+  outcomes = Array.isArray(saved.jdOutcomes) ? saved.jdOutcomes : [];
   hydrated = true;
 }
 
@@ -16,7 +18,8 @@ async function persistState() {
   await chrome.storage.local.set({
     jdQueue: queue,
     jdCollected: collected,
-    jdWorkerTabId: workerTabId
+    jdWorkerTabId: workerTabId,
+    jdOutcomes: outcomes
   });
 }
 
@@ -60,8 +63,11 @@ async function runNext() {
   await hydrateState();
   if (!queue.length) {
     await downloadResults();
-    setStatus(`完成，共采集 ${collected.length} 条；请选择 CSV 保存位置。`);
-    await chrome.storage.local.remove(['jdQueue', 'jdCollected', 'jdWorkerTabId']);
+    const details = outcomes.map(item =>
+      `${item.productId || item.url}：要求 ${item.requested}，实际 ${item.actual}${item.actual < item.requested ? '（评论已到底，未达标）' : ''}`
+    ).join('\n');
+    setStatus(`任务完成，共采集 ${collected.length} 条。\n${details}\nCSV 已开始下载。`);
+    await chrome.storage.local.remove(['jdQueue', 'jdCollected', 'jdWorkerTabId', 'jdOutcomes']);
     return;
   }
   const target = queue[0];
@@ -111,6 +117,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         queue = parseTargets(message.text);
         if (!queue.length) throw new Error('请至少输入一个商品');
         collected = [];
+        outcomes = [];
         await persistState();
         setStatus(`任务已开始，共 ${queue.length} 个商品`);
         await runNext();
@@ -132,9 +139,20 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       // Ignore a late duplicate completion message from the previous page.
       if (!queue.length || queue[0].url !== message.url) return;
       collected.push(...message.rows);
+      outcomes.push({
+        url: message.url,
+        productId: message.productId || '',
+        requested: Number(message.requested || queue[0].count || 0),
+        actual: message.rows.length
+      });
       queue.shift();
       await persistState();
-      setStatus(`${message.url} 完成：${message.rows.length} 条`);
+      const requested = Number(message.requested || 0);
+      setStatus(
+        message.rows.length < requested
+          ? `${message.url} 评论已到底：要求 ${requested} 条，实际 ${message.rows.length} 条；继续下一个商品。`
+          : `${message.url} 完成：${message.rows.length}/${requested} 条`
+      );
       await runNext();
     })();
     return;

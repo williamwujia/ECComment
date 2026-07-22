@@ -79,8 +79,10 @@
   function scrollReviews() {
     const knownContainer = document.querySelector('#rateList [class*="_rateListContainer_"], .jdc-page-overlay [class*="_rateListContainer_"]');
     if (knownContainer) {
+      const before = knownContainer.scrollTop;
+      const atEnd = before + knownContainer.clientHeight >= knownContainer.scrollHeight - 8;
       knownContainer.scrollBy(0, Math.max(knownContainer.clientHeight * .8, 500));
-      return true;
+      return {found: true, atEnd};
     }
     const card = cards()[0];
     let node = card?.parentElement;
@@ -88,11 +90,14 @@
       const style = getComputedStyle(node);
       if (/(auto|scroll)/.test(style.overflowY) && node.scrollHeight > node.clientHeight + 20) {
         node.scrollBy(0, Math.max(node.clientHeight * .8, 500));
-        return true;
+        return {
+          found: true,
+          atEnd: node.scrollTop + node.clientHeight >= node.scrollHeight - 8
+        };
       }
       node = node.parentElement;
     }
-    return false;
+    return {found: false, atEnd: false};
   }
 
   async function scrape(target) {
@@ -104,7 +109,8 @@
     const rows = [];
     const seen = new Set();
     let stale = 0;
-    while (rows.length < target.count && stale < 10) {
+    let bottomWithoutNew = 0;
+    while (rows.length < target.count && stale < 10 && bottomWithoutNew < 3) {
       const before = rows.length;
       for (const card of cards()) {
         const row = extract(card, target.url);
@@ -114,8 +120,10 @@
       }
       stale = rows.length === before ? stale + 1 : 0;
       chrome.runtime.sendMessage({type: 'PROGRESS', url: target.url, count: rows.length, target: target.count});
-      if (!scrollReviews()) throw new Error('没有找到评价弹层的滚动区域，已停止以避免滚动主页面');
+      const scroll = scrollReviews();
+      if (!scroll.found) throw new Error('没有找到评价弹层的滚动区域，已停止以避免滚动主页面');
       await sleep(1300);
+      bottomWithoutNew = scroll.atEnd && rows.length === before ? bottomWithoutNew + 1 : 0;
     }
     return rows.slice(0, target.count);
   }
@@ -138,7 +146,13 @@
     if (message.type !== 'SCRAPE') return;
     sendResponse({started: true});
     scrape(message.target)
-      .then(rows => chrome.runtime.sendMessage({type: 'DONE', url: message.target.url, rows}))
+      .then(rows => chrome.runtime.sendMessage({
+        type: 'DONE',
+        url: message.target.url,
+        productId: productId(),
+        requested: message.target.count,
+        rows
+      }))
       .catch(error => chrome.runtime.sendMessage({type: 'FAILED', url: message.target.url, error: error.message}));
   });
 })();
