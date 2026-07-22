@@ -6,3 +6,4 @@ PyYAML>=6.0,<7
 tqdm>=4.66,<5
 streamlit>=1.58,<2
 plotly>=5.22,<7
+playwright>=1.49,<2

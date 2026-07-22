@@ -2,6 +2,7 @@ input_html/*
 !input_html/.gitkeep
 
 output/*
+.browser_profiles/
 !output/.gitkeep
 
 __pycache__/

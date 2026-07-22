@@ -1133,7 +1133,7 @@ def render_update_form(
 ) -> None:
     st.title("批量更新")
     st.caption(
-        "一次选择一个或多个 SingleFile。商品 ID 从页面自动识别，"
+        "一次选择一个或多个 SingleFile HTML 或京东评论 CSV。商品 ID 自动识别，"
         "预览会按文件顺序模拟连续更新；LLM 只在确认写入后调用。"
     )
     with st.form("check_update"):
@@ -1173,14 +1173,14 @@ def render_update_form(
             disabled=not enable_sentiment,
         )
         uploaded = st.file_uploader(
-            "SingleFile 页面（可多选）",
-            type=["html", "htm"],
+            "数据文件（SingleFile HTML 或京东评论 CSV，可多选）",
+            type=["html", "htm", "csv"],
             accept_multiple_files=True,
         )
         checked = st.form_submit_button("检查更新")
     if checked:
         if not uploaded:
-            st.error("请至少选择一个页面文件。")
+            st.error("请至少选择一个 HTML 或 CSV 数据文件。")
         else:
             files = [
                 {"name": item.name, "bytes": item.getvalue()}
@@ -1604,7 +1604,7 @@ def render_usage_guide() -> None:
 
 ### 更新数据
 
-1. 进入“数据更新”，一次选择一个或多个 SingleFile 页面。
+1. 进入“数据更新”，选择 SingleFile HTML 或京东评论 CSV；两种文件可以一起上传。
 2. 商品 ID 从每个页面自动读取；页面没有商品 ID 时会报错，不会写入。
 3. 点击“检查更新”查看新增、重复、待确认和边界状态；预览不会调用 LLM。
 4. 点击“确认写入”后才更新工作簿，并默认把每条新增评论和追评提交给 LLM 快判。

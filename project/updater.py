@@ -18,6 +18,7 @@ from analysis.summary import build_summaries
 from extractor.html_loader import load_html
 from extractor.platform_detect import detect_platform
 from extractor.product_meta import extract_product_meta
+from extractor.review_csv import extract_csv_contents, extract_csv_identity, split_review_csv
 from extractor.reviews import parse_reviews
 from extractor.taobao_qa import parse_taobao_qa
 from llm.deepseek_client import DeepSeekClient
@@ -219,6 +220,8 @@ def _register_product_in_frames(
 
 def extract_page_identity(file_path: str) -> dict:
     path = Path(file_path).expanduser().resolve()
+    if path.suffix.casefold() == ".csv":
+        return extract_csv_identity(path)
     raw = path.read_bytes()
     html_text = load_html(str(path))
     platform = detect_platform(html_text, str(path))
@@ -240,6 +243,8 @@ def extract_page_identity(file_path: str) -> dict:
 
 
 def extract_contents(file_path: str, platform: str) -> list[dict]:
+    if Path(file_path).suffix.casefold() == ".csv":
+        return extract_csv_contents(file_path)
     html_text = load_html(file_path)
     soup = BeautifulSoup(html_text, "lxml")
     meta = extract_product_meta(html_text, soup, file_path, platform)
@@ -641,14 +646,30 @@ def update_project_files(
     dry_run: bool = False,
     **kwargs,
 ) -> list[dict]:
-    """Update multiple SingleFile pages in order, isolating failures per file."""
+    """Update SingleFile pages or structured review CSVs, isolating failures."""
     if not file_paths:
         raise ValueError("至少需要提供一个页面文件")
     requested_sentiment = bool(kwargs.get("enable_sentiment", True))
 
+    import_temp = tempfile.TemporaryDirectory()
+    expanded_paths: list[str] = []
+    try:
+        for index, file_path in enumerate(file_paths):
+            path = Path(file_path)
+            if path.suffix.casefold() == ".csv":
+                group_dir = Path(import_temp.name) / str(index)
+                expanded_paths.extend(
+                    str(item) for item in split_review_csv(path, group_dir)
+                )
+            else:
+                expanded_paths.append(str(path))
+    except Exception:
+        import_temp.cleanup()
+        raise
+
     def run_batch(target_workbook: str, simulate: bool) -> list[dict]:
         results: list[dict] = []
-        for file_path in file_paths:
+        for file_path in expanded_paths:
             try:
                 result = update_project_item(
                     target_workbook,
@@ -681,14 +702,20 @@ def update_project_files(
         return results
 
     if not dry_run:
-        return run_batch(workbook_path, False)
+        try:
+            return run_batch(workbook_path, False)
+        finally:
+            import_temp.cleanup()
 
     source = Path(workbook_path).expanduser().resolve()
     with tempfile.TemporaryDirectory() as temp_dir:
         preview_workbook = Path(temp_dir) / source.name
         shutil.copy2(source, preview_workbook)
         kwargs["enable_sentiment"] = False
-        return run_batch(str(preview_workbook), True)
+        try:
+            return run_batch(str(preview_workbook), True)
+        finally:
+            import_temp.cleanup()
 
 
 def run_incremental_sentiment(

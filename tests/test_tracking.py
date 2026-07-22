@@ -455,5 +455,71 @@ class TrackingTests(unittest.TestCase):
             self.assertEqual(repeated["candidate_count"], 0)
 
 
+class ReviewCsvImportTests(unittest.TestCase):
+    def test_combined_jd_csv_is_split_and_merged_into_project(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workbook = root / "project.xlsx"
+            csv_path = root / "jd_reviews.csv"
+            create_project(str(workbook), "p1", "消费者反馈洞察")
+            pd.DataFrame(
+                [
+                    {
+                        "platform": "jd",
+                        "product_id": "13745188",
+                        "product_url": "https://item.jd.com/13745188.html",
+                        "product_title": "百科全书",
+                        "user_name_masked": "a***1",
+                        "rating": "5",
+                        "review_time": "2026-07-20",
+                        "sku": "65册",
+                        "review_text_raw": "孩子很喜欢。",
+                    },
+                    {
+                        "platform": "jd",
+                        "product_id": "100244103673",
+                        "product_url": "https://item.jd.com/100244103673.html",
+                        "product_title": "另一套图书",
+                        "user_name_masked": "b***2",
+                        "rating": "5",
+                        "review_time": "2026-07-21",
+                        "sku": "套装",
+                        "review_text_raw": "内容清晰易懂。",
+                    },
+                ]
+            ).to_csv(csv_path, index=False, encoding="utf-8-sig")
+
+            results = update_project_files(
+                str(workbook), "p1", [str(csv_path)], enable_sentiment=False
+            )
+
+            products = pd.read_excel(workbook, sheet_name="products")
+            contents = pd.read_excel(workbook, sheet_name="content_master")
+            self.assertEqual(len(results), 2)
+            self.assertEqual(set(products["item_key"]), {"jd:13745188", "jd:100244103673"})
+            self.assertEqual(set(contents["content_text_clean"]), {"孩子很喜欢。", "内容清晰易懂。"})
+
+    def test_jd_component_heading_is_not_saved_as_product_title(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workbook = root / "project.xlsx"
+            csv_path = root / "jd_reviews.csv"
+            create_project(str(workbook), "p1", "消费者反馈洞察")
+            pd.DataFrame([{
+                "platform": "jd",
+                "product_id": "13745188",
+                "product_url": "https://item.jd.com/13745188.html",
+                "product_title": "最小单价计算器",
+                "review_text_raw": "内容很好。",
+            }]).to_csv(csv_path, index=False, encoding="utf-8-sig")
+
+            update_project_files(
+                str(workbook), "p1", [str(csv_path)], enable_sentiment=False
+            )
+
+            products = pd.read_excel(workbook, sheet_name="products").fillna("")
+            self.assertEqual(products.iloc[0]["product_title_current"], "")
+
+
 if __name__ == "__main__":
     unittest.main()
