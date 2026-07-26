@@ -12,12 +12,15 @@ SENTIMENT_LABELS = {
 
 EVIDENCE_LEVELS = ("A", "B", "C", "D")
 REVIEW_ROLES = {"review", "followup"}
+TAOBAO_TMALL_PLATFORMS = {"taobao", "tmall"}
 
 
 def build_brand_overview(content: pd.DataFrame) -> dict:
     frame = content.copy()
     roles = _text_series(frame, "content_role")
+    platforms = _text_series(frame, "platform").str.strip().str.casefold()
     reviews = frame[roles.isin(REVIEW_ROLES)].copy()
+    taobao_tmall = platforms.isin(TAOBAO_TMALL_PLATFORMS)
     review_sentiment = sentiment_series(reviews)
     evidence = _text_series(reviews, "evidence_level").str.upper()
     sentiment_counts = {
@@ -35,6 +38,19 @@ def build_brand_overview(content: pd.DataFrame) -> dict:
         "review_count": len(reviews),
         "question_count": int(roles.eq("question").sum()),
         "answer_count": int(roles.eq("answer").sum()),
+        "taobao_tmall_review_count": int(
+            (roles.isin(REVIEW_ROLES) & taobao_tmall).sum()
+        ),
+        "taobao_tmall_question_count": int(
+            (roles.eq("question") & taobao_tmall).sum()
+        ),
+        "taobao_tmall_answer_count": int(
+            (roles.eq("answer") & taobao_tmall).sum()
+        ),
+        "platform_content_counts": {
+            platform or "未标明来源": int(count)
+            for platform, count in platforms.value_counts(dropna=False).items()
+        },
         "sentiment_counts": sentiment_counts,
         "sentiment_judged_count": sentiment_judged,
         "sentiment_unjudged_count": max(len(reviews) - sentiment_judged, 0),

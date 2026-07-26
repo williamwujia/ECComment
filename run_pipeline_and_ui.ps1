@@ -2,6 +2,7 @@ param(
     [string]$InputDir = (Join-Path $PSScriptRoot "input_html"),
     [string]$OutputDir = (Join-Path $PSScriptRoot "output"),
     [string]$RunName = "",
+    [int]$Port = 8501,
     [switch]$Recursive
 )
 
@@ -44,6 +45,34 @@ function Invoke-Step {
     }
 }
 
+function Find-AvailableTcpPort {
+    param([int]$StartPort)
+
+    if ($StartPort -lt 1 -or $StartPort -gt 65535) {
+        throw "Port must be between 1 and 65535."
+    }
+
+    for ($candidate = $StartPort; $candidate -le 65535; $candidate++) {
+        $listener = $null
+        try {
+            $listener = [System.Net.Sockets.TcpListener]::new(
+                [System.Net.IPAddress]::Any,
+                $candidate
+            )
+            $listener.Start()
+            return $candidate
+        } catch [System.Net.Sockets.SocketException] {
+            Write-Host "Port $candidate is in use; trying $($candidate + 1)..."
+        } finally {
+            if ($null -ne $listener) {
+                $listener.Stop()
+            }
+        }
+    }
+
+    throw "No available TCP port was found at or above $StartPort."
+}
+
 $pythonExe = Find-Python
 Write-Host "Using Python: $pythonExe" -ForegroundColor Green
 
@@ -71,4 +100,6 @@ Invoke-Step "Extract new HTML files" {
 Write-Host ""
 Write-Host "Extraction finished. Starting Streamlit review UI..." -ForegroundColor Green
 Write-Host "Closing this window will stop the UI server." -ForegroundColor Yellow
-& $pythonExe -m streamlit run (Join-Path $PSScriptRoot "app.py")
+$selectedPort = Find-AvailableTcpPort -StartPort $Port
+Write-Host "Local URL: http://localhost:$selectedPort" -ForegroundColor Green
+& $pythonExe -m streamlit run (Join-Path $PSScriptRoot "app.py") --server.port $selectedPort

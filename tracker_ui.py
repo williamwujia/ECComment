@@ -10,6 +10,8 @@ import streamlit as st
 from project.updater import (
     create_named_project,
     create_project,
+    delete_project_snapshot,
+    snapshot_deletion_impact,
     update_project_files,
 )
 from project.workbook import load_sheets
@@ -115,6 +117,9 @@ def main() -> None:
     created_message = st.session_state.pop("project_created_message", "")
     if created_message:
         st.success(created_message)
+    action_message = st.session_state.pop("project_action_message", "")
+    if action_message:
+        st.success(action_message)
 
     project_ids = (
         sheets["project_info"]["project_id"].fillna("").astype(str).tolist()
@@ -155,7 +160,7 @@ def main() -> None:
     elif page == "数据更新":
         render_update_form(workbook, sheets, project_id)
     elif page == "项目状态":
-        render_project_home(sheets, project_id)
+        render_project_home(workbook, sheets, project_id)
     elif page == "数据质量与日志":
         render_maintenance_quality(sheets, project_id)
     elif page == "待复核队列":
@@ -341,10 +346,36 @@ def render_brand_overview(
 
     st.subheader("反馈规模")
     scale = st.columns(4)
-    scale[0].metric("商品评论", f"{overview['review_count']:,}")
-    scale[1].metric("问大家问题", f"{overview['question_count']:,}")
-    scale[2].metric("问大家回答", f"{overview['answer_count']:,}")
-    scale[3].metric("全部内容", f"{overview['total_content_count']:,}")
+    scale[0].metric(
+        "淘宝/天猫商品评论",
+        f"{overview['taobao_tmall_review_count']:,}",
+    )
+    scale[1].metric(
+        "淘宝/天猫问大家问题",
+        f"{overview['taobao_tmall_question_count']:,}",
+    )
+    scale[2].metric(
+        "淘宝/天猫问大家回答",
+        f"{overview['taobao_tmall_answer_count']:,}",
+    )
+    scale[3].metric(
+        "全部内容（全部来源）",
+        f"{overview['total_content_count']:,}",
+    )
+    platform_labels = {
+        "taobao": "淘宝",
+        "tmall": "天猫",
+        "jd": "京东",
+        "未标明来源": "未标明来源",
+    }
+    source_breakdown = " ｜ ".join(
+        f"{platform_labels.get(platform, platform)} {count:,}"
+        for platform, count in overview["platform_content_counts"].items()
+    )
+    st.caption(
+        "来源口径：前三项仅统计淘宝/天猫；全部内容包含所有已导入来源。"
+        f" 全部内容来源分布：{source_breakdown or '暂无内容'}。"
+    )
 
     evidence = overview["evidence_counts"]
     funnel_summary = {
@@ -985,6 +1016,7 @@ def render_maintenance_quality(
 
 
 def render_project_home(
+    workbook: str,
     sheets: dict[str, pd.DataFrame],
     project_id: str,
 ) -> None:
@@ -1109,9 +1141,11 @@ def render_project_home(
 
     if not recent.empty:
         st.subheader("最近快照")
-        show_table(
-            recent.head(10),
-            columns=[
+        st.caption("单击一行可查看影响并移除错误更新。删除前会自动备份项目文件。")
+        recent_rows = recent.head(10).reset_index(drop=True)
+        shown = recent_rows[
+            [
+                "snapshot_id",
                 "capture_time",
                 "item_key",
                 "source_file",
@@ -1120,10 +1154,85 @@ def render_project_home(
                 "existing_count",
                 "uncertain_count",
                 "boundary_status",
-                "notes",
-            ],
-            height=320,
+            ]
+        ].rename(
+            columns={
+                "snapshot_id": "快照 ID",
+                "capture_time": "保存时间",
+                "item_key": "商品",
+                "source_file": "来源文件",
+                "extracted_count": "提取数",
+                "new_count": "新增数",
+                "existing_count": "已有数",
+                "uncertain_count": "待确认数",
+                "boundary_status": "边界状态",
+            }
         )
+        selection = st.dataframe(
+            shown,
+            width="stretch",
+            height=320,
+            hide_index=True,
+            on_select="rerun",
+            selection_mode="single-row",
+            key=f"recent_snapshot_table_{project_id}",
+        )
+        selected_rows = selection.selection.rows
+        if selected_rows:
+            selected = recent_rows.iloc[int(selected_rows[0])]
+            render_snapshot_deletion(
+                workbook,
+                sheets,
+                project_id,
+                str(selected["snapshot_id"]),
+            )
+
+
+def render_snapshot_deletion(
+    workbook: str,
+    sheets: dict[str, pd.DataFrame],
+    project_id: str,
+    snapshot_id: str,
+) -> None:
+    try:
+        impact = snapshot_deletion_impact(sheets, project_id, snapshot_id)
+    except Exception as exc:
+        st.error(str(exc))
+        return
+
+    st.markdown("#### 移除所选快照")
+    st.warning(
+        f"将移除 {impact['capture_time']} 导入的“{impact['source_file']}”。"
+        "系统会根据其他快照重新计算内容状态。"
+    )
+    metrics = st.columns(4)
+    metrics[0].metric("该快照内容", impact["extracted_count"])
+    metrics[1].metric("当时新增", impact["new_count"])
+    metrics[2].metric("将彻底移除内容", impact["removed_content_count"])
+    metrics[3].metric("删除后剩余快照", impact["remaining_snapshot_count"])
+    if impact["removes_product"]:
+        st.info("这是该商品唯一的快照；删除后该商品记录也会从项目中移除。")
+
+    confirmed = st.checkbox(
+        "我确认移除这个快照及仅由它产生的数据",
+        key=f"confirm_delete_snapshot_{snapshot_id}",
+    )
+    if st.button(
+        "移除所选快照",
+        type="primary",
+        disabled=not confirmed,
+        key=f"delete_snapshot_{snapshot_id}",
+    ):
+        try:
+            result = delete_project_snapshot(workbook, project_id, snapshot_id)
+        except Exception as exc:
+            st.error(f"无法移除快照：{exc}")
+            return
+        cached_load_sheets.clear()
+        st.session_state["project_action_message"] = (
+            f"已移除快照，并删除 {result['removed_content_count']} 条仅由该快照产生的内容。"
+        )
+        st.rerun()
 
 
 def render_update_form(
@@ -1164,14 +1273,13 @@ def render_update_form(
             ),
         )
         sentiment_full_llm = sentiment_strategy.startswith("全量 LLM")
-        sentiment_detail_limit = st.number_input(
-            "情绪详析上限",
-            min_value=0,
-            max_value=1000,
-            value=50,
-            step=10,
-            disabled=not enable_sentiment,
+        st.text_input(
+            "情绪详析覆盖率",
+            value="100%",
+            disabled=True,
+            help="对所有符合详析条件的高价值评论执行情绪详析。",
         )
+        sentiment_detail_limit = None
         uploaded = st.file_uploader(
             "数据文件（SingleFile HTML 或京东评论 CSV，可多选）",
             type=["html", "htm", "csv"],
@@ -1198,7 +1306,7 @@ def render_update_form(
                     brand_product_id=brand_product_id or None,
                     enable_sentiment=enable_sentiment,
                     sentiment_full_llm=sentiment_full_llm,
-                    sentiment_detail_limit=int(sentiment_detail_limit),
+                    sentiment_detail_limit=sentiment_detail_limit,
                     dry_run=True,
                 )
             except Exception as exc:
@@ -1215,7 +1323,7 @@ def render_update_form(
                     "brand_product_id": brand_product_id or None,
                     "enable_sentiment": enable_sentiment,
                     "sentiment_full_llm": sentiment_full_llm,
-                    "sentiment_detail_limit": int(sentiment_detail_limit),
+                    "sentiment_detail_limit": sentiment_detail_limit,
                 }
 
     preview = st.session_state.get("tracking_preview")
@@ -1612,7 +1720,7 @@ def render_usage_guide() -> None:
 
 ### 维护页面
 
-- **项目状态**：查看商品、内容、快照、待复核和情绪覆盖情况。
+- **项目状态**：查看商品、内容、快照、待复核和情绪覆盖情况；可在“最近快照”中选中并移除错误更新。
 - **数据质量与日志**：集中查看 fallback、警告、失败、页面快照和更新日志。
 - **待复核队列**：处理身份信息不足的疑似重复内容。
 - **扩展分析**：检查情绪快判、详析、失败和 LLM 运行摘要。

@@ -16,6 +16,7 @@ def sample_content() -> pd.DataFrame:
             {
                 "item_key": "p1",
                 "product_title": "商品一",
+                "platform": "tmall",
                 "content_role": "review",
                 "sentiment_label": "P",
                 "evidence_level": "A",
@@ -25,6 +26,7 @@ def sample_content() -> pd.DataFrame:
             {
                 "item_key": "p1",
                 "product_title": "商品一",
+                "platform": "taobao",
                 "content_role": "followup",
                 "sentiment_label": "N",
                 "evidence_level": "D",
@@ -34,6 +36,7 @@ def sample_content() -> pd.DataFrame:
             {
                 "item_key": "p2",
                 "product_title": "商品二",
+                "platform": "jd",
                 "content_role": "review",
                 "sentiment_label_cn": "褒贬混合",
                 "evidence_level": "B",
@@ -43,6 +46,7 @@ def sample_content() -> pd.DataFrame:
             {
                 "item_key": "p2",
                 "product_title": "商品二",
+                "platform": "jd",
                 "content_role": "review",
                 "sentiment_label": "Z",
                 "evidence_level": "C",
@@ -52,6 +56,7 @@ def sample_content() -> pd.DataFrame:
             {
                 "item_key": "p2",
                 "product_title": "商品二",
+                "platform": "jd",
                 "content_role": "review",
                 "sentiment_label": "",
                 "evidence_level": "",
@@ -61,11 +66,13 @@ def sample_content() -> pd.DataFrame:
             {
                 "item_key": "p1",
                 "product_title": "商品一",
+                "platform": "taobao",
                 "content_role": "question",
             },
             {
                 "item_key": "p1",
                 "product_title": "商品一",
+                "platform": "tmall",
                 "content_role": "answer",
             },
         ]
@@ -79,6 +86,14 @@ def test_brand_overview_counts_viewer_metrics() -> None:
     assert overview["review_count"] == 5
     assert overview["question_count"] == 1
     assert overview["answer_count"] == 1
+    assert overview["taobao_tmall_review_count"] == 2
+    assert overview["taobao_tmall_question_count"] == 1
+    assert overview["taobao_tmall_answer_count"] == 1
+    assert overview["platform_content_counts"] == {
+        "jd": 3,
+        "tmall": 2,
+        "taobao": 2,
+    }
     assert overview["sentiment_counts"] == {
         "P": 1,
         "N": 1,

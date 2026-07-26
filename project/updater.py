@@ -308,6 +308,134 @@ def get_latest_snapshot(
     return _latest_snapshot_from_frames(sheets, project_id, item_key)
 
 
+def snapshot_deletion_impact(
+    sheets: dict[str, pd.DataFrame],
+    project_id: str,
+    snapshot_id: str,
+) -> dict:
+    """Describe the records that would disappear with a snapshot."""
+    context = _snapshot_deletion_context(sheets, project_id, snapshot_id)
+    target = context["target"]
+    return {
+        "snapshot_id": snapshot_id,
+        "item_key": target["item_key"],
+        "capture_time": target.get("capture_time", ""),
+        "source_file": target.get("source_file", ""),
+        "extracted_count": int(target.get("extracted_count") or 0),
+        "new_count": int(target.get("new_count") or 0),
+        "removed_content_count": len(context["removed_content_ids"]),
+        "remaining_snapshot_count": len(context["remaining_snapshots"]),
+        "removes_product": not context["remaining_snapshots"],
+    }
+
+
+def delete_project_snapshot(
+    workbook_path: str,
+    project_id: str,
+    snapshot_id: str,
+) -> dict:
+    """Delete one snapshot and reconcile all data derived from it."""
+    sheets = load_sheets(workbook_path)
+    _require_project(sheets, project_id)
+    impact = snapshot_deletion_impact(sheets, project_id, snapshot_id)
+    context = _snapshot_deletion_context(sheets, project_id, snapshot_id)
+    target = context["target"]
+    item_key = _text(target.get("item_key"))
+    removed_content_ids = context["removed_content_ids"]
+
+    master = sheets["content_master"].copy()
+    if removed_content_ids:
+        master = master[
+            ~master["content_id"].fillna("").astype(str).isin(removed_content_ids)
+        ].copy()
+    for content_id, changes in context["master_updates"].items():
+        mask = master["content_id"].fillna("").astype(str).eq(content_id)
+        for column, value in changes.items():
+            master.loc[mask, column] = value
+    sheets["content_master"] = normalize_frame("content_master", master)
+
+    analysis = sheets["analysis"]
+    if removed_content_ids and not analysis.empty:
+        analysis = analysis[
+            ~analysis["content_id"].fillna("").astype(str).isin(removed_content_ids)
+        ].copy()
+    sheets["analysis"] = normalize_frame("analysis", analysis)
+
+    target_snapshot_mask = (
+        sheets["snapshots"]["project_id"].fillna("").astype(str).eq(project_id)
+        & sheets["snapshots"]["snapshot_id"].fillna("").astype(str).eq(snapshot_id)
+    )
+    sheets["snapshots"] = normalize_frame(
+        "snapshots",
+        sheets["snapshots"].loc[~target_snapshot_mask].copy(),
+    )
+    _drop_snapshot_rows(sheets, "snapshot_contents", project_id, snapshot_id)
+    _drop_snapshot_rows(sheets, "update_log", project_id, snapshot_id)
+    _drop_snapshot_rows(sheets, "review_queue", project_id, snapshot_id)
+    _drop_snapshot_rows(sheets, "sentiment_run_summary", project_id, snapshot_id)
+    _drop_snapshot_rows(sheets, "sentiment_failures", project_id, snapshot_id)
+    _drop_snapshot_rows(sheets, "sentiment_timings", project_id, snapshot_id)
+    _drop_snapshot_rows(sheets, "sentiment_summary", project_id, snapshot_id)
+
+    first_snapshot_by_content = {
+        content_id: changes["first_seen_snapshot_id"]
+        for content_id, changes in context["master_updates"].items()
+    }
+    first_source_by_content = {
+        content_id: changes["source_file_first"]
+        for content_id, changes in context["master_updates"].items()
+    }
+    for sheet_name in ("sentiment_fast", "sentiment_detail"):
+        frame = sheets[sheet_name].copy()
+        if removed_content_ids and not frame.empty:
+            frame = frame[
+                ~frame["content_id"].fillna("").astype(str).isin(removed_content_ids)
+            ].copy()
+        if not frame.empty:
+            target_mask = (
+                frame["project_id"].fillna("").astype(str).eq(project_id)
+                & frame["snapshot_id"].fillna("").astype(str).eq(snapshot_id)
+            )
+            for index in frame.index[target_mask]:
+                content_id = _text(frame.at[index, "content_id"])
+                replacement = first_snapshot_by_content.get(content_id)
+                if replacement:
+                    frame.at[index, "snapshot_id"] = replacement
+                    if "source_file" in frame.columns:
+                        frame.at[index, "source_file"] = first_source_by_content.get(
+                            content_id,
+                            frame.at[index, "source_file"],
+                        )
+                else:
+                    frame = frame.drop(index)
+        sheets[sheet_name] = normalize_frame(sheet_name, frame)
+
+    products = sheets["products"].copy()
+    product_mask = (
+        products["project_id"].fillna("").astype(str).eq(project_id)
+        & products["item_key"].fillna("").astype(str).eq(item_key)
+    )
+    latest = context["latest_snapshot"]
+    if latest is None:
+        products = products.loc[~product_mask].copy()
+    else:
+        products.loc[product_mask, "product_title_current"] = _text(
+            latest.get("product_title")
+        )
+        products.loc[product_mask, "shop_name_current"] = _text(latest.get("shop_name"))
+        products.loc[product_mask, "last_updated_at"] = _text(latest.get("capture_time"))
+    sheets["products"] = normalize_frame("products", products)
+
+    _touch_project(sheets, project_id)
+    rebuild_compatibility_sheets_from_frames(sheets, project_id)
+    backup = write_sheets_atomic(workbook_path, sheets)
+    return {
+        **impact,
+        "result": "success",
+        "backup_path": str(backup or ""),
+    }
+
+
 def _latest_snapshot_from_frames(
     sheets: dict[str, pd.DataFrame],
     project_id: str,
@@ -1529,6 +1657,126 @@ def _append_update_log(sheets: dict[str, pd.DataFrame], result: dict) -> None:
         "message": result.get("message", ""),
     }
     sheets["update_log"] = _append(sheets["update_log"], [row], "update_log")
+
+
+def _snapshot_deletion_context(
+    sheets: dict[str, pd.DataFrame],
+    project_id: str,
+    snapshot_id: str,
+) -> dict:
+    snapshots = sheets["snapshots"]
+    target_rows = snapshots[
+        snapshots["project_id"].fillna("").astype(str).eq(project_id)
+        & snapshots["snapshot_id"].fillna("").astype(str).eq(snapshot_id)
+    ]
+    if target_rows.empty:
+        raise ValueError(f"项目中不存在该快照：{snapshot_id}")
+    target = _records(target_rows.head(1))[0]
+    item_key = _text(target.get("item_key"))
+    remaining = snapshots[
+        snapshots["project_id"].fillna("").astype(str).eq(project_id)
+        & snapshots["item_key"].fillna("").astype(str).eq(item_key)
+        & ~snapshots["snapshot_id"].fillna("").astype(str).eq(snapshot_id)
+    ].copy()
+    if not remaining.empty:
+        remaining["_capture"] = pd.to_datetime(remaining["capture_time"], errors="coerce")
+        remaining["_imported"] = pd.to_datetime(remaining["imported_at"], errors="coerce")
+        remaining = remaining.sort_values(["_capture", "_imported"])
+        remaining = remaining.drop(columns=["_capture", "_imported"])
+    remaining_snapshots = _records(remaining)
+    snapshot_by_id = {
+        _text(row.get("snapshot_id")): row for row in remaining_snapshots
+    }
+    ordered_ids = list(snapshot_by_id)
+
+    contents = sheets["snapshot_contents"]
+    remaining_contents = contents[
+        contents["project_id"].fillna("").astype(str).eq(project_id)
+        & contents["item_key"].fillna("").astype(str).eq(item_key)
+        & contents["snapshot_id"].fillna("").astype(str).isin(ordered_ids)
+    ]
+    stored_snapshot_ids = set(
+        remaining_contents["snapshot_id"].fillna("").astype(str)
+    )
+    missing_contents = [
+        _text(row.get("snapshot_id"))
+        for row in remaining_snapshots
+        if int(row.get("extracted_count") or 0) > 0
+        and _text(row.get("snapshot_id")) not in stored_snapshot_ids
+    ]
+    if missing_contents:
+        raise ValueError(
+            "剩余快照缺少内容明细，无法安全回退；项目文件未修改："
+            + ", ".join(missing_contents)
+        )
+    occurrences: dict[str, set[str]] = {}
+    for row in _records(remaining_contents):
+        current_snapshot_id = _text(row.get("snapshot_id"))
+        for token in _identity_tokens(row):
+            occurrences.setdefault(token, set()).add(current_snapshot_id)
+
+    master = sheets["content_master"]
+    item_master = master[
+        master["project_id"].fillna("").astype(str).eq(project_id)
+        & master["item_key"].fillna("").astype(str).eq(item_key)
+    ]
+    removed_content_ids: set[str] = set()
+    master_updates: dict[str, dict] = {}
+    latest_snapshot_id = ordered_ids[-1] if ordered_ids else ""
+    for row in _records(item_master):
+        content_id = _text(row.get("content_id"))
+        matching_ids: set[str] = set()
+        for token in _identity_tokens(row):
+            if token in occurrences:
+                matching_ids = occurrences[token]
+                break
+        appearances = [value for value in ordered_ids if value in matching_ids]
+        if not appearances:
+            removed_content_ids.add(content_id)
+            continue
+        first = snapshot_by_id[appearances[0]]
+        last = snapshot_by_id[appearances[-1]]
+        master_updates[content_id] = {
+            "first_seen_snapshot_id": appearances[0],
+            "first_seen_at": _text(first.get("capture_time")),
+            "last_seen_snapshot_id": appearances[-1],
+            "last_seen_at": _text(last.get("capture_time")),
+            "source_file_first": _text(first.get("source_file")),
+            "source_file_last": _text(last.get("source_file")),
+            "is_active": latest_snapshot_id in matching_ids,
+        }
+    return {
+        "target": target,
+        "remaining_snapshots": remaining_snapshots,
+        "latest_snapshot": remaining_snapshots[-1] if remaining_snapshots else None,
+        "removed_content_ids": removed_content_ids,
+        "master_updates": master_updates,
+    }
+
+
+def _identity_tokens(row: dict) -> list[str]:
+    tokens = []
+    for column in ("identity_key", "strict_key", "composite_key", "text_key"):
+        value = _text(row.get(column)).strip()
+        if value:
+            tokens.append(f"{column}:{value}")
+    return tokens
+
+
+def _drop_snapshot_rows(
+    sheets: dict[str, pd.DataFrame],
+    sheet_name: str,
+    project_id: str,
+    snapshot_id: str,
+) -> None:
+    frame = sheets[sheet_name]
+    if frame.empty:
+        return
+    mask = (
+        frame["project_id"].fillna("").astype(str).eq(project_id)
+        & frame["snapshot_id"].fillna("").astype(str).eq(snapshot_id)
+    )
+    sheets[sheet_name] = normalize_frame(sheet_name, frame.loc[~mask].copy())
 
 
 def _latest_snapshot_contents(

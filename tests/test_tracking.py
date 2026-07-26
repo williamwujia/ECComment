@@ -13,12 +13,14 @@ from project.updater import (
     backfill_project_sentiment,
     create_named_project,
     create_project,
+    delete_project_snapshot,
     project_filename_stem,
     reanalyze_project,
     register_product,
     update_project_files,
     update_project_item,
 )
+from project.workbook import load_sheets
 
 
 def _keyed(text: str, item_key: str = "tmall:123", user: str = "u") -> dict:
@@ -106,6 +108,155 @@ class FakeTrackingSentimentClient:
 
 
 class TrackingTests(unittest.TestCase):
+    def test_delete_latest_snapshot_rolls_back_its_new_content(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workbook = root / "project.xlsx"
+            first = root / "first.html"
+            second = root / "second.html"
+            first.write_text(
+                _html(
+                    "123",
+                    [
+                        ("review A", "2026-07-01", "u1"),
+                        ("review B", "2026-07-01", "u2"),
+                    ],
+                ),
+                encoding="utf-8",
+            )
+            second.write_text(
+                _html(
+                    "123",
+                    [
+                        ("wrong review", "2026-07-02", "u3"),
+                        ("review A", "2026-07-01", "u1"),
+                        ("review B", "2026-07-01", "u2"),
+                    ],
+                ),
+                encoding="utf-8",
+            )
+            create_project(str(workbook), "p1", "测试项目")
+            first_result = update_project_item(
+                str(workbook),
+                "p1",
+                None,
+                str(first),
+                capture_time="2026-07-01 12:00:00",
+                enable_sentiment=False,
+            )
+            second_result = update_project_item(
+                str(workbook),
+                "p1",
+                None,
+                str(second),
+                capture_time="2026-07-02 12:00:00",
+                enable_sentiment=False,
+            )
+
+            result = delete_project_snapshot(
+                str(workbook),
+                "p1",
+                second_result["snapshot_id"],
+            )
+            sheets = load_sheets(workbook)
+
+            self.assertEqual(result["removed_content_count"], 1)
+            self.assertTrue(Path(result["backup_path"]).exists())
+            self.assertEqual(
+                set(sheets["snapshots"]["snapshot_id"]),
+                {first_result["snapshot_id"]},
+            )
+            self.assertEqual(
+                set(sheets["content_master"]["content_text_clean"]),
+                {"review A", "review B"},
+            )
+            self.assertTrue(sheets["content_master"]["is_active"].map(bool).all())
+            self.assertNotIn(
+                second_result["snapshot_id"],
+                set(sheets["update_log"]["snapshot_id"]),
+            )
+
+    def test_delete_earlier_snapshot_keeps_content_seen_later(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workbook = root / "project.xlsx"
+            first = root / "first.html"
+            second = root / "second.html"
+            first.write_text(
+                _html("123", [("review A", "2026-07-01", "u1")]),
+                encoding="utf-8",
+            )
+            second.write_text(
+                _html(
+                    "123",
+                    [
+                        ("review B", "2026-07-02", "u2"),
+                        ("review A", "2026-07-01", "u1"),
+                    ],
+                ),
+                encoding="utf-8",
+            )
+            create_project(str(workbook), "p1", "测试项目")
+            first_result = update_project_item(
+                str(workbook),
+                "p1",
+                None,
+                str(first),
+                capture_time="2026-07-01 12:00:00",
+                enable_sentiment=False,
+            )
+            second_result = update_project_item(
+                str(workbook),
+                "p1",
+                None,
+                str(second),
+                capture_time="2026-07-02 12:00:00",
+                enable_sentiment=False,
+            )
+
+            result = delete_project_snapshot(
+                str(workbook),
+                "p1",
+                first_result["snapshot_id"],
+            )
+            sheets = load_sheets(workbook)
+
+            self.assertEqual(result["removed_content_count"], 0)
+            self.assertEqual(
+                set(sheets["content_master"]["content_text_clean"]),
+                {"review A", "review B"},
+            )
+            self.assertEqual(
+                set(sheets["content_master"]["first_seen_snapshot_id"]),
+                {second_result["snapshot_id"]},
+            )
+
+    def test_delete_only_snapshot_removes_empty_product(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workbook = root / "project.xlsx"
+            page = root / "page.html"
+            page.write_text(
+                _html("123", [("wrong review", "2026-07-01", "u1")]),
+                encoding="utf-8",
+            )
+            create_project(str(workbook), "p1", "测试项目")
+            update = update_project_item(
+                str(workbook),
+                "p1",
+                None,
+                str(page),
+                capture_time="2026-07-01 12:00:00",
+                enable_sentiment=False,
+            )
+
+            delete_project_snapshot(str(workbook), "p1", update["snapshot_id"])
+            sheets = load_sheets(workbook)
+
+            self.assertTrue(sheets["snapshots"].empty)
+            self.assertTrue(sheets["content_master"].empty)
+            self.assertTrue(sheets["products"].empty)
+
     def test_create_named_project_uses_safe_readable_filename(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             workbook = create_named_project(
