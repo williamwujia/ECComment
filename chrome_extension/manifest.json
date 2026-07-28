@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "京东评论采集器",
-  "version": "0.1.2",
+  "version": "0.1.4",
   "description": "在日常 Chrome 登录会话中采集京东最新商品评价",
-  "permissions": ["storage", "tabs"],
+  "permissions": ["storage", "tabs", "downloads", "alarms"],
   "host_permissions": ["https://item.jd.com/*"],
   "background": {"service_worker": "service_worker.js"},
   "action": {"default_popup": "popup.html", "default_title": "京东评论采集器"},

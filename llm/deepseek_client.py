@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -39,7 +40,16 @@ class DeepSeekClient:
         self.base_url = (base_url or os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")).rstrip("/")
         self.default_model = default_model or os.getenv("DEEPSEEK_DEFAULT_MODEL", "deepseek-v4-flash")
         self.timeout = timeout
+        self._timing_local = threading.local()
         self.last_timing: dict[str, Any] = {}
+
+    @property
+    def last_timing(self) -> dict[str, Any]:
+        return getattr(self._timing_local, "value", {})
+
+    @last_timing.setter
+    def last_timing(self, value: dict[str, Any]) -> None:
+        self._timing_local.value = value
 
     def chat_json(
         self,

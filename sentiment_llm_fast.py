@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from sentiment_codes import COMPLAINT_CODES, PRAISE_CODES, SENTIMENT_LABELS
@@ -91,11 +92,35 @@ class FastSentimentLLM:
         self.model_name = model_name
         self.max_retries = max_retries
 
-    def analyze(self, comments: list[dict], batch_size: int = 50) -> FastSentimentBatchResult:
+    def analyze(
+        self,
+        comments: list[dict],
+        batch_size: int = 50,
+        concurrency: int = 10,
+    ) -> FastSentimentBatchResult:
         result = FastSentimentBatchResult()
-        for index in range(0, len(comments), max(batch_size, 1)):
-            batch = comments[index : index + max(batch_size, 1)]
-            self._analyze_batch(batch, result, attempt=1)
+        size = max(batch_size, 1)
+        batches = [
+            comments[index : index + size]
+            for index in range(0, len(comments), size)
+        ]
+        if not batches:
+            return result
+
+        def analyze_one(batch: list[dict]) -> FastSentimentBatchResult:
+            batch_result = FastSentimentBatchResult()
+            self._analyze_batch(batch, batch_result, attempt=1)
+            return batch_result
+
+        with ThreadPoolExecutor(
+            max_workers=min(max(int(concurrency or 1), 1), len(batches)),
+            thread_name_prefix="sentiment-fast",
+        ) as executor:
+            # map preserves input batch order while requests run concurrently.
+            for batch_result in executor.map(analyze_one, batches):
+                result.rows.extend(batch_result.rows)
+                result.failures.extend(batch_result.failures)
+                result.timings.extend(batch_result.timings)
         return result
 
     def _analyze_batch(self, comments: list[dict], result: FastSentimentBatchResult, attempt: int) -> None:

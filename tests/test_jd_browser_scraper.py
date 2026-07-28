@@ -1,4 +1,13 @@
-from jd_browser_scraper import ScrapeTarget, normalize_review, parse_target_line, product_id_from_url
+import json
+
+from jd_browser_scraper import (
+    ScrapeTarget,
+    merge_review_rows,
+    normalize_review,
+    parse_target_line,
+    product_id_from_url,
+    write_results,
+)
 
 
 def test_product_id_from_standard_and_query_urls():
@@ -34,3 +43,29 @@ def test_normalize_review_maps_required_fields():
     assert row["review_date"] == "2026-07-21"
     assert row["product_title"] == "测试手机"
     assert row["review_text_clean"] == "很好用，运行流畅。"
+
+
+def test_merge_review_rows_deduplicates_checkpoints():
+    destination = [{"review_hash": "a", "review_text_raw": "第一条"}]
+    added = merge_review_rows(
+        destination,
+        [
+            {"review_hash": "a", "review_text_raw": "第一条"},
+            {"review_hash": "b", "review_text_raw": "第二条"},
+        ],
+    )
+    assert added == 1
+    assert [row["review_hash"] for row in destination] == ["a", "b"]
+
+
+def test_write_results_reuses_checkpoint_files(tmp_path):
+    first = [{"review_hash": "a", "review_text_raw": "第一条"}]
+    second = [*first, {"review_hash": "b", "review_text_raw": "第二条"}]
+
+    json_path, csv_path = write_results(first, tmp_path, "checkpoint")
+    same_json_path, same_csv_path = write_results(second, tmp_path, "checkpoint")
+
+    assert same_json_path == json_path
+    assert same_csv_path == csv_path
+    assert len(json.loads(json_path.read_text(encoding="utf-8"))) == 2
+    assert not list(tmp_path.glob("*.tmp"))

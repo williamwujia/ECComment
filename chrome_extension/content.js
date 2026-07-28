@@ -1,6 +1,7 @@
 (() => {
   if (window.__jdReviewCollectorInstalled) return;
   window.__jdReviewCollectorInstalled = true;
+  let activeScrapeUrl = null;
 
   const clean = value => (value || '').replace(/\s+/g, ' ').trim();
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -106,17 +107,36 @@
     else if (!await clickText(['全部评价', '买家评价'])) throw new Error('没有找到“全部评价”');
     if (!await clickText(['最新', '最新评价', '时间排序'])) throw new Error('没有找到“最新”排序');
 
-    const rows = [];
-    const seen = new Set();
+    const rows = Array.isArray(target.checkpointRows) ? target.checkpointRows.slice(0, target.count) : [];
+    const seen = new Set(rows.map(row =>
+      [row.user_name_masked, row.review_time, row.sku, row.review_text_raw].join('|')
+    ));
     let stale = 0;
     let bottomWithoutNew = 0;
     while (rows.length < target.count && stale < 10 && bottomWithoutNew < 3) {
       const before = rows.length;
+      const added = [];
       for (const card of cards()) {
         const row = extract(card, target.url);
         const key = [row.user_name_masked, row.review_time, row.sku, row.review_text_raw].join('|');
-        if (row.review_text_raw && !seen.has(key)) { seen.add(key); rows.push(row); }
+        if (row.review_text_raw && !seen.has(key)) {
+          seen.add(key);
+          rows.push(row);
+          added.push(row);
+        }
         if (rows.length >= target.count) break;
+      }
+      if (added.length) {
+        const checkpoint = await chrome.runtime.sendMessage({
+          type: 'CHECKPOINT',
+          url: target.url,
+          rows: added,
+          count: rows.length,
+          target: target.count
+        });
+        if (!checkpoint?.saved) {
+          throw new Error('新增评论未能写入本地检查点，采集已暂停以避免数据丢失');
+        }
       }
       stale = rows.length === before ? stale + 1 : 0;
       chrome.runtime.sendMessage({type: 'PROGRESS', url: target.url, count: rows.length, target: target.count});
@@ -129,6 +149,10 @@
   }
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message.type === 'PING_SCRAPER') {
+      sendResponse({active: Boolean(activeScrapeUrl), url: activeScrapeUrl});
+      return;
+    }
     if (message.type === 'EXPORT_CSV') {
       const blob = new Blob([message.csv], {type: 'text/csv;charset=utf-8'});
       const url = URL.createObjectURL(blob);
@@ -144,6 +168,14 @@
       return;
     }
     if (message.type !== 'SCRAPE') return;
+    if (activeScrapeUrl) {
+      sendResponse({
+        started: activeScrapeUrl === message.target.url,
+        alreadyRunning: true
+      });
+      return;
+    }
+    activeScrapeUrl = message.target.url;
     sendResponse({started: true});
     scrape(message.target)
       .then(rows => chrome.runtime.sendMessage({
@@ -153,6 +185,13 @@
         requested: message.target.count,
         rows
       }))
-      .catch(error => chrome.runtime.sendMessage({type: 'FAILED', url: message.target.url, error: error.message}));
+      .catch(error => chrome.runtime.sendMessage({
+        type: 'FAILED',
+        url: message.target.url,
+        error: error.message
+      }))
+      .finally(() => {
+        activeScrapeUrl = null;
+      });
   });
 })();

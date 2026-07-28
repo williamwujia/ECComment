@@ -12,6 +12,7 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from project.schema import COMPATIBILITY_SHEETS, SHEET_COLUMNS
+from utils.excel_sanitizer import sanitize_frame_for_excel
 
 
 def empty_frame(sheet_name: str) -> pd.DataFrame:
@@ -84,7 +85,7 @@ def write_sheets_atomic(
                 name for name in sheets if name not in SHEET_COLUMNS
             ]
             for name in ordered:
-                frame = sheets.get(name, pd.DataFrame())
+                frame = sanitize_frame_for_excel(sheets.get(name, pd.DataFrame()))
                 frame.to_excel(writer, sheet_name=name[:31], index=False)
             _style_workbook(writer.book)
 

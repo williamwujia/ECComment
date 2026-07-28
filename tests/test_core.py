@@ -17,6 +17,8 @@ from extractor.product_meta import extract_product_meta
 from extractor.reviews import parse_reviews
 from extractor.taobao_qa import parse_taobao_qa
 from main import build_timestamped_output_path, sanitize_run_name
+from utils.excel_sanitizer import sanitize_frame_for_excel
+from utils.text_cleaner import clean_text
 from ui.source_display import source_file_name
 from ui.data_loader import (
     ExcelLoadError,
@@ -45,6 +47,31 @@ META = {
 
 
 class CoreTests(unittest.TestCase):
+    def test_invalid_excel_control_characters_are_removed(self):
+        text = "发货很快\x01使用方便\x0b效果不错\n保留换行\t保留制表符"
+
+        self.assertEqual(
+            clean_text(text),
+            "发货很快使用方便效果不错\n保留换行 保留制表符",
+        )
+
+        frame = sanitize_frame_for_excel(pd.DataFrame({"comment": [text]}))
+        self.assertNotIn("\x01", frame.loc[0, "comment"])
+        self.assertNotIn("\x0b", frame.loc[0, "comment"])
+
+    def test_html_loader_removes_excel_control_characters(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "control-char.html"
+            path.write_text(
+                '<div class="content--hash">发货很快\x01使用方便</div>',
+                encoding="utf-8",
+            )
+
+            html = load_html(str(path))
+
+            self.assertEqual(html.count("\x01"), 0)
+            self.assertIn("发货很快使用方便", html)
+
     def test_capture_quality_warning_flags_review_preview_with_large_qa_section(self):
         content = pd.DataFrame(
             [

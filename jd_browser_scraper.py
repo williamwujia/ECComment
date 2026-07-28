@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 from urllib.parse import parse_qs, urlparse
 
 from utils.dedupe import md5_text
@@ -216,7 +216,12 @@ def open_reviews(page: Any) -> None:
     page.wait_for_timeout(1_500)
 
 
-def scrape_target(page: Any, target: ScrapeTarget, max_stale_rounds: int = 10) -> tuple[list[dict[str, Any]], str]:
+def scrape_target(
+    page: Any,
+    target: ScrapeTarget,
+    max_stale_rounds: int = 10,
+    checkpoint: Callable[[list[dict[str, Any]]], None] | None = None,
+) -> tuple[list[dict[str, Any]], str]:
     print(f"\n打开 {target.url}，目标 {target.count} 条")
     page.goto(target.url, wait_until="domcontentloaded", timeout=60_000)
     title = _product_title(page)
@@ -233,6 +238,8 @@ def scrape_target(page: Any, target: ScrapeTarget, max_stale_rounds: int = 10) -
                 rows.append(row)
                 if len(rows) >= target.count:
                     break
+        if len(rows) > before and checkpoint is not None:
+            checkpoint(rows)
         print(f"已采集 {len(rows)}/{target.count} 条", end="\r", flush=True)
         stale_rounds = stale_rounds + 1 if len(rows) == before else 0
         page.evaluate(r"""
@@ -262,18 +269,39 @@ def scrape_target(page: Any, target: ScrapeTarget, max_stale_rounds: int = 10) -
     return rows[: target.count], title
 
 
-def write_results(rows: list[dict[str, Any]], output_dir: Path) -> tuple[Path, Path]:
+def write_results(
+    rows: list[dict[str, Any]],
+    output_dir: Path,
+    stamp: str | None = None,
+) -> tuple[Path, Path]:
     output_dir.mkdir(parents=True, exist_ok=True)
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    stamp = stamp or datetime.now().strftime("%Y%m%d_%H%M%S")
     json_path = output_dir / f"jd_reviews_{stamp}.json"
     csv_path = output_dir / f"jd_reviews_{stamp}.csv"
-    json_path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+    json_tmp = json_path.with_suffix(".json.tmp")
+    csv_tmp = csv_path.with_suffix(".csv.tmp")
+    json_tmp.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
     columns = list(rows[0]) if rows else ["platform", "product_url", "product_id", "review_text_raw"]
-    with csv_path.open("w", encoding="utf-8-sig", newline="") as handle:
+    with csv_tmp.open("w", encoding="utf-8-sig", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=columns, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
+    json_tmp.replace(json_path)
+    csv_tmp.replace(csv_path)
     return json_path, csv_path
+
+
+def merge_review_rows(destination: list[dict[str, Any]], rows: Iterable[dict[str, Any]]) -> int:
+    known = {str(row.get("review_hash") or "") for row in destination}
+    added = 0
+    for row in rows:
+        digest = str(row.get("review_hash") or "")
+        if not digest or digest in known:
+            continue
+        known.add(digest)
+        destination.append(row)
+        added += 1
+    return added
 
 
 def parse_args() -> argparse.Namespace:
@@ -295,6 +323,13 @@ def run(args: argparse.Namespace) -> int:
         return 2
 
     all_rows: list[dict[str, Any]] = []
+    run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    def save_checkpoint(current_rows: list[dict[str, Any]]) -> None:
+        merge_review_rows(all_rows, current_rows)
+        paths = write_results(all_rows, args.output, run_stamp)
+        print(f"\n已保存中途检查点：{paths[1]}")
+
     with sync_playwright() as playwright:
         try:
             context = playwright.chromium.launch_persistent_context(
@@ -313,19 +348,19 @@ def run(args: argparse.Namespace) -> int:
             targets = prompt_targets(args.count)
         for target in targets:
             try:
-                rows, _ = scrape_target(page, target)
-                all_rows.extend(rows)
+                rows, _ = scrape_target(page, target, checkpoint=save_checkpoint)
+                merge_review_rows(all_rows, rows)
             except Exception as exc:
                 print(f"抓取 {target.url} 失败：{exc}", file=sys.stderr)
             finally:
                 if all_rows:
-                    paths = write_results(all_rows, args.output)
+                    paths = write_results(all_rows, args.output, run_stamp)
                     print(f"已保存检查点：{paths[1]}")
         context.close()
     if not all_rows:
         print("没有采集到评论。", file=sys.stderr)
         return 1
-    json_path, csv_path = write_results(all_rows, args.output)
+    json_path, csv_path = write_results(all_rows, args.output, run_stamp)
     print(f"完成，共 {len(all_rows)} 条\nJSON：{json_path}\nCSV：{csv_path}")
     return 0
 

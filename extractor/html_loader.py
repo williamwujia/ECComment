@@ -4,14 +4,16 @@ import io
 import zipfile
 from pathlib import Path
 
+from utils.text_cleaner import remove_invalid_xml_chars
+
 
 def _decode_html(raw: bytes) -> str:
     for encoding in ("utf-8-sig", "utf-8", "gb18030", "gbk"):
         try:
-            return raw.decode(encoding)
+            return remove_invalid_xml_chars(raw.decode(encoding))
         except UnicodeDecodeError:
             continue
-    return raw.decode("utf-8", errors="replace")
+    return remove_invalid_xml_chars(raw.decode("utf-8", errors="replace"))
 
 
 def load_html(file_path: str) -> str:
