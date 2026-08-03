@@ -1,0 +1,44 @@
+[Unit]
+Description=Tmall Comment Streamlit service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tmallcomment
+Group=tmallcomment
+WorkingDirectory=/opt/tmall-comment
+EnvironmentFile=-/etc/tmall-comment/tmall-comment.env
+ExecStart=/opt/tmall-comment/.venv311/bin/python -m streamlit run /opt/tmall-comment/app.py --server.address=127.0.0.1 --server.port=8501 --server.baseUrlPath=TmallComment --server.maxUploadSize=20 --server.headless=true
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+UMask=0077
+
+# Service-account and filesystem isolation. The application may only persist
+# project workbooks and review feedback; source code and secrets stay read-only.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+AmbientCapabilities=
+ReadWritePaths=/opt/tmall-comment/projects /opt/tmall-comment/output
+
+# Contain parser/LLM overload. Adjust only after measuring normal peak usage.
+MemoryMax=1G
+CPUQuota=150%
+TasksMax=128
+
+[Install]
+WantedBy=multi-user.target

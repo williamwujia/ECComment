@@ -8,7 +8,7 @@ from sentiment_llm_detail import DetailSentimentLLM, should_detail_analyze
 from sentiment_llm_fast import FastSentimentLLM
 from sentiment_rules import try_rule_sentiment
 
-DEFAULT_LLM_CONCURRENCY = 10
+DEFAULT_LLM_CONCURRENCY = 100
 
 
 @dataclass

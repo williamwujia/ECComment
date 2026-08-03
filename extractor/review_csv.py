@@ -7,6 +7,8 @@ from typing import Any
 
 import pandas as pd
 
+from security.upload_limits import PUBLIC_UPLOAD_LIMITS, UploadLimitError
+
 
 REQUIRED_COLUMNS = {"platform", "product_id", "review_text_raw"}
 INVALID_PRODUCT_TITLES = {"最小单价计算器"}
@@ -20,11 +22,20 @@ def _text(value: Any) -> str:
 
 def read_review_csv(path: str | Path) -> pd.DataFrame:
     source = Path(path)
+    if source.stat().st_size > PUBLIC_UPLOAD_LIMITS.max_file_bytes:
+        raise UploadLimitError(
+            f"{source.name} 超过单文件 "
+            f"{PUBLIC_UPLOAD_LIMITS.max_file_bytes // (1024 * 1024)} MB 限制。"
+        )
     try:
         frame = pd.read_csv(source, encoding="utf-8-sig", dtype=str).fillna("")
     except UnicodeDecodeError:
         frame = pd.read_csv(source, encoding="gb18030", dtype=str).fillna("")
     frame.columns = [str(column).strip() for column in frame.columns]
+    if len(frame) > PUBLIC_UPLOAD_LIMITS.max_csv_rows:
+        raise UploadLimitError(
+            f"{source.name} 超过 {PUBLIC_UPLOAD_LIMITS.max_csv_rows:,} 行限制。"
+        )
     missing = sorted(REQUIRED_COLUMNS - set(frame.columns))
     if missing:
         raise ValueError(f"评论 CSV 缺少必要列：{', '.join(missing)}")

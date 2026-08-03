@@ -63,7 +63,7 @@ class DetailSentimentLLM:
         comments: list[dict],
         fast_rows_by_id: dict[str, dict],
         batch_size: int = 10,
-        concurrency: int = 10,
+        concurrency: int = 100,
     ) -> DetailSentimentBatchResult:
         result = DetailSentimentBatchResult()
         size = max(batch_size, 1)

@@ -96,7 +96,7 @@ class FastSentimentLLM:
         self,
         comments: list[dict],
         batch_size: int = 50,
-        concurrency: int = 10,
+        concurrency: int = 100,
     ) -> FastSentimentBatchResult:
         result = FastSentimentBatchResult()
         size = max(batch_size, 1)

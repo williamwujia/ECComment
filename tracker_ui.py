@@ -9,12 +9,13 @@ import streamlit as st
 
 from project.updater import (
     create_named_project,
-    create_project,
     delete_project_snapshot,
     snapshot_deletion_impact,
     update_project_files,
 )
 from project.workbook import load_sheets
+from security.update_rate_limit import PUBLIC_UPDATE_LIMITER
+from security.upload_limits import PUBLIC_UPLOAD_LIMITS, UploadLimitError, validate_upload_batch
 from ui.charts import (
     evidence_bar,
     funnel_chart,
@@ -62,7 +63,6 @@ MAINTENANCE_PAGES = [
     "维护说明",
 ]
 NEW_PROJECT_OPTION = "__new_project__"
-MANUAL_WORKBOOK_OPTION = "__manual_workbook__"
 PROJECTS_DIRECTORY = Path("projects")
 
 
@@ -99,8 +99,7 @@ def main() -> None:
     workbook_path = Path(workbook).expanduser()
     if not workbook_path.exists():
         if maintenance:
-            st.title("创建持续追踪项目")
-            render_create_project(workbook)
+            st.error("所选项目文件不存在；请通过“新建项目”创建受管项目。")
         else:
             st.error("该项目的数据文件不存在，请联系维护者。")
         return
@@ -182,11 +181,7 @@ def workbook_picker(*, maintenance: bool) -> str:
                 [str(path) for path in candidates],
                 format_func=lambda value: Path(value).stem,
             )
-        options = (
-            [NEW_PROJECT_OPTION]
-            + [str(path) for path in candidates]
-            + [MANUAL_WORKBOOK_OPTION]
-        )
+        options = [NEW_PROJECT_OPTION] + [str(path) for path in candidates]
         preferred = st.session_state.pop(
             "select_workbook_after_create",
             None,
@@ -213,11 +208,6 @@ def workbook_picker(*, maintenance: bool) -> str:
         if selected == NEW_PROJECT_OPTION:
             st.caption("创建一个新的持续追踪项目")
             return NEW_PROJECT_OPTION
-        default_path = str(
-            (PROJECTS_DIRECTORY / "consumer_evidence.xlsx").resolve()
-        )
-        if selected == MANUAL_WORKBOOK_OPTION:
-            return st.text_input("工作簿路径", value=default_path).strip()
         st.caption(str(Path(selected).resolve()))
         return selected
 
@@ -225,8 +215,6 @@ def workbook_picker(*, maintenance: bool) -> str:
 def workbook_option_label(value: str) -> str:
     if value == NEW_PROJECT_OPTION:
         return "＋ 新建项目"
-    if value == MANUAL_WORKBOOK_OPTION:
-        return "手动输入工作簿"
     return Path(value).stem
 
 
@@ -240,7 +228,7 @@ def matching_workbook_option(
         return preferred
     preferred_path = Path(preferred).expanduser().resolve()
     for option in options:
-        if option in {NEW_PROJECT_OPTION, MANUAL_WORKBOOK_OPTION}:
+        if option == NEW_PROJECT_OPTION:
             continue
         if Path(option).expanduser().resolve() == preferred_path:
             return option
@@ -274,12 +262,8 @@ def discover_project_workbooks(root: str | Path = "projects") -> list[Path]:
     )
 
 
-def render_create_project(workbook: str | None = None) -> None:
-    managed_path = workbook is None
-    if managed_path:
-        st.caption("创建后会生成独立项目文件，并自动切换到该项目。")
-    else:
-        st.info("该工作簿尚不存在，可以在这里创建新项目。")
+def render_create_project() -> None:
+    st.caption("创建后会生成独立项目文件，并自动切换到该项目。")
     with st.form("create_project"):
         project_name = st.text_input(
             "项目名称",
@@ -289,14 +273,7 @@ def render_create_project(workbook: str | None = None) -> None:
             "项目目标（可选）",
             placeholder="例如：持续追踪重点型号的评论变化与 AI 影响",
         )
-        project_id = (
-            ""
-            if managed_path
-            else st.text_input(
-                "项目 ID",
-                help="用于数据关联，创建后不建议修改。",
-            )
-        )
+        project_id = ""
         submitted = st.form_submit_button(
             "创建项目",
             type="primary",
@@ -304,20 +281,11 @@ def render_create_project(workbook: str | None = None) -> None:
         )
     if submitted:
         try:
-            if managed_path:
-                created_path = create_named_project(
-                    PROJECTS_DIRECTORY,
-                    project_name,
-                    objective,
-                )
-            else:
-                create_project(
-                    str(workbook),
-                    project_id,
-                    project_name,
-                    objective,
-                )
-                created_path = Path(str(workbook)).expanduser().resolve()
+            created_path = create_named_project(
+                PROJECTS_DIRECTORY,
+                project_name,
+                objective,
+            )
         except Exception as exc:
             st.error(str(exc))
         else:
@@ -1284,6 +1252,11 @@ def render_update_form(
             "数据文件（SingleFile HTML 或京东评论 CSV，可多选）",
             type=["html", "htm", "csv"],
             accept_multiple_files=True,
+            help=(
+                f"每次最多 {PUBLIC_UPLOAD_LIMITS.max_files} 个文件；单文件最多 "
+                f"{PUBLIC_UPLOAD_LIMITS.max_file_bytes // (1024 * 1024)} MB；"
+                f"总计最多 {PUBLIC_UPLOAD_LIMITS.max_total_bytes // (1024 * 1024)} MB。"
+            ),
         )
         checked = st.form_submit_button("检查更新")
     if checked:
@@ -1295,6 +1268,7 @@ def render_update_form(
                 for item in uploaded
             ]
             try:
+                validate_upload_batch(files)
                 preview = _run_uploaded_updates(
                     workbook,
                     project_id,
@@ -1342,18 +1316,33 @@ def render_update_form(
         if item.get("error"):
             st.error(f"{item.get('source_file')}：{item['error']}")
     if st.button("确认写入", type="primary"):
-        results = _run_uploaded_updates(
-            workbook,
-            payload["project_id"],
-            payload["files"],
-            platform=payload["platform"],
-            capture_time=payload["capture_time"],
-            brand_product_id=payload["brand_product_id"],
-            enable_sentiment=payload["enable_sentiment"],
-            sentiment_full_llm=payload.get("sentiment_full_llm", True),
-            sentiment_detail_limit=payload["sentiment_detail_limit"],
-            dry_run=False,
-        )
+        try:
+            validate_upload_batch(payload["files"])
+        except UploadLimitError as exc:
+            st.error(str(exc))
+            return
+        blocked_reason = PUBLIC_UPDATE_LIMITER.try_begin()
+        if blocked_reason:
+            st.error(blocked_reason)
+            return
+        try:
+            results = _run_uploaded_updates(
+                workbook,
+                payload["project_id"],
+                payload["files"],
+                platform=payload["platform"],
+                capture_time=payload["capture_time"],
+                brand_product_id=payload["brand_product_id"],
+                enable_sentiment=payload["enable_sentiment"],
+                sentiment_full_llm=payload.get("sentiment_full_llm", True),
+                sentiment_detail_limit=payload["sentiment_detail_limit"],
+                dry_run=False,
+            )
+        except Exception as exc:
+            st.error(f"更新失败：{exc}")
+            return
+        finally:
+            PUBLIC_UPDATE_LIMITER.finish()
         failed = [item for item in results if item.get("result") == "failed"]
         succeeded = [
             item for item in results if item.get("result") != "failed"
