@@ -6,6 +6,8 @@ import pandas as pd
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
+from utils.excel_sanitizer import sanitize_frame_for_excel
+
 
 SHEET_COLUMNS = {
     "ai_candidates": [
@@ -179,7 +181,7 @@ def write_excel(output_path: str, sheets: dict) -> None:
 
     with pd.ExcelWriter(path, engine="openpyxl") as writer:
         for name in SHEET_COLUMNS:
-            _frame(name, sheets.get(name, [])).to_excel(
+            sanitize_frame_for_excel(_frame(name, sheets.get(name, []))).to_excel(
                 writer, sheet_name=name, index=False
             )
 

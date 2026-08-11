@@ -8,6 +8,8 @@ from sentiment_llm_detail import DetailSentimentLLM, should_detail_analyze
 from sentiment_llm_fast import FastSentimentLLM
 from sentiment_rules import try_rule_sentiment
 
+DEFAULT_LLM_CONCURRENCY = 100
+
 
 @dataclass
 class SentimentPipelineResult:
@@ -28,7 +30,8 @@ def select_sentiment_targets(contents: list[dict], limit: int | None = None) -> 
     targets = [
         row
         for row in contents
-        if row.get("content_role") == "review" and str(row.get("content_text_clean") or "").strip()
+        if row.get("content_role") in {"review", "followup"}
+        and str(row.get("content_text_clean") or "").strip()
     ]
     if limit is not None:
         targets = targets[: max(limit, 0)]
@@ -43,6 +46,8 @@ def process_sentiment_for_comments(
     detail_batch_size: int = 10,
     detail_limit: int | None = 50,
     dry_run: bool = False,
+    use_local_rules: bool = False,
+    concurrency: int = DEFAULT_LLM_CONCURRENCY,
 ) -> SentimentPipelineResult:
     started_at = time.perf_counter()
     result = SentimentPipelineResult(total_count=len(comments))
@@ -50,7 +55,9 @@ def process_sentiment_for_comments(
     rule_rows = []
     llm_needed = []
     for comment in comments:
-        rule_result = try_rule_sentiment(comment)
+        rule_result = (
+            try_rule_sentiment(comment) if use_local_rules else None
+        )
         if rule_result:
             rule_rows.append(_row_from_fast_result(comment, rule_result))
         else:
@@ -64,7 +71,11 @@ def process_sentiment_for_comments(
         return result
 
     fast_llm = FastSentimentLLM(client=client, model_name=model_name)
-    fast_llm_result = fast_llm.analyze(llm_needed, batch_size=batch_size)
+    fast_llm_result = fast_llm.analyze(
+        llm_needed,
+        batch_size=batch_size,
+        concurrency=concurrency,
+    )
     result.fast_rows.extend(fast_llm_result.rows)
     result.failure_rows.extend(_with_stage(row, "sentiment_fast") for row in fast_llm_result.failures)
     result.timing_rows.extend(fast_llm_result.timings)
@@ -81,7 +92,12 @@ def process_sentiment_for_comments(
         detail_candidates = detail_candidates[: max(detail_limit, 0)]
 
     detail_llm = DetailSentimentLLM(client=client, model_name=model_name)
-    detail_result = detail_llm.analyze(detail_candidates, fast_rows_by_id, batch_size=detail_batch_size)
+    detail_result = detail_llm.analyze(
+        detail_candidates,
+        fast_rows_by_id,
+        batch_size=detail_batch_size,
+        concurrency=concurrency,
+    )
     result.detail_rows.extend(detail_result.rows)
     result.failure_rows.extend(_with_stage(row, "sentiment_detail") for row in detail_result.failures)
     result.timing_rows.extend(detail_result.timings)

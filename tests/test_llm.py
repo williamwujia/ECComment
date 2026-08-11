@@ -124,7 +124,7 @@ class LLMTests(unittest.TestCase):
                     "deepseek": {
                       "api_key_file": "config/secrets/deepseek_api_key.txt",
                       "base_url": "https://api.deepseek.com",
-                      "default_model": "deepseek-v4-flash",
+                      "default_model": "DeepSeek-V4-Flash-Preview",
                       "default_batch_size": 50,
                       "timeout_seconds": 90,
                       "target_content_count": 500,
@@ -139,7 +139,7 @@ class LLMTests(unittest.TestCase):
             config = load_provider_config(path, "deepseek")
         self.assertEqual(config.provider, "deepseek")
         self.assertEqual(config.api_key_file, "config/secrets/deepseek_api_key.txt")
-        self.assertEqual(config.default_model, "deepseek-v4-flash")
+        self.assertEqual(config.default_model, "DeepSeek-V4-Flash-0731")
         self.assertEqual(config.default_batch_size, 50)
         self.assertEqual(config.timeout_seconds, 90)
         self.assertEqual(config.target_content_count, 500)
@@ -317,7 +317,7 @@ class LLMTests(unittest.TestCase):
             validator=LLMResultValidator(),
             retry_delays=(0,),
         )
-        result = service.analyze_comments([COMMENT], "deepseek-v4-flash", "v1")
+        result = service.analyze_comments([COMMENT], "DeepSeek-V4-Flash-0731", "v1")
         self.assertEqual(result.success_count, 1)
         self.assertEqual(result.failed_count, 0)
         self.assertEqual(result.analysis_rows[0]["overall_sentiment"], "mixed")
@@ -334,7 +334,7 @@ class LLMTests(unittest.TestCase):
         )
         result = service.analyze_comments(
             [COMMENT, {**COMMENT, "content_id": 2, "content_hash": "def456"}],
-            "deepseek-v4-flash",
+            "DeepSeek-V4-Flash-0731",
             "v1",
             batch_size=2,
         )

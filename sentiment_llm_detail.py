@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 
@@ -57,11 +58,36 @@ class DetailSentimentLLM:
         self.model_name = model_name
         self.max_retries = max_retries
 
-    def analyze(self, comments: list[dict], fast_rows_by_id: dict[str, dict], batch_size: int = 10) -> DetailSentimentBatchResult:
+    def analyze(
+        self,
+        comments: list[dict],
+        fast_rows_by_id: dict[str, dict],
+        batch_size: int = 10,
+        concurrency: int = 100,
+    ) -> DetailSentimentBatchResult:
         result = DetailSentimentBatchResult()
-        for index in range(0, len(comments), max(batch_size, 1)):
-            batch = comments[index : index + max(batch_size, 1)]
-            self._analyze_batch(batch, fast_rows_by_id, result, attempt=1)
+        worker_count = max(int(concurrency or 1), 1)
+        size = min(max(batch_size, 1), max(len(comments) // worker_count, 1))
+        batches = [
+            comments[index : index + size]
+            for index in range(0, len(comments), size)
+        ]
+        if not batches:
+            return result
+
+        def analyze_one(batch: list[dict]) -> DetailSentimentBatchResult:
+            batch_result = DetailSentimentBatchResult()
+            self._analyze_batch(batch, fast_rows_by_id, batch_result, attempt=1)
+            return batch_result
+
+        with ThreadPoolExecutor(
+            max_workers=min(worker_count, len(batches)),
+            thread_name_prefix="sentiment-detail",
+        ) as executor:
+            for batch_result in executor.map(analyze_one, batches):
+                result.rows.extend(batch_result.rows)
+                result.failures.extend(batch_result.failures)
+                result.timings.extend(batch_result.timings)
         return result
 
     def _analyze_batch(

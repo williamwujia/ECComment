@@ -1,0 +1,8 @@
+workbook_version: "2.0"
+default_platform: "tmall"
+overlap_window_size: 50
+minimum_strict_overlap: 3
+backup_directory: "backups"
+analysis_modules:
+  - "ai_candidate"
+  - "sentiment"

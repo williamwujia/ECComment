@@ -5,11 +5,11 @@ import plotly.express as px
 import plotly.graph_objects as go
 
 
-COLOR_BLUE = "#1e3a8a"
-COLOR_GRAY = "#64748b"
+COLOR_BLUE = "#3b82f6"
+COLOR_GRAY = "#94a3b8"
 COLOR_ORANGE = "#f59e0b"
-COLOR_GREEN = "#16a34a"
-COLOR_RED = "#dc2626"
+COLOR_GREEN = "#22c55e"
+COLOR_RED = "#ef4444"
 
 
 def vertical_axis_title(text: str) -> str:
@@ -33,7 +33,7 @@ def with_vertical_y_title(fig: go.Figure, title: str) -> go.Figure:
         xanchor="center",
         yanchor="middle",
         textangle=0,
-        font={"size": 12, "color": "#475569"},
+        font={"size": 12},
     )
     return fig
 
@@ -48,7 +48,7 @@ def funnel_chart(summary: dict) -> go.Figure:
                 summary.get("ai_candidates", 0),
                 summary.get("a_level", 0),
             ],
-            marker={"color": [COLOR_GRAY, "#475569", COLOR_BLUE, "#172554"]},
+            marker={"color": [COLOR_GRAY, "#64748b", COLOR_BLUE, "#60a5fa"]},
         )
     )
     return with_vertical_y_title(
@@ -67,7 +67,7 @@ def evidence_bar(content: pd.DataFrame) -> go.Figure:
         y="level",
         orientation="h",
         color="level",
-        color_discrete_map={"A": "#1e3a8a", "B": "#2563eb", "C": COLOR_ORANGE, "D": "#94a3b8"},
+        color_discrete_map={"A": "#2563eb", "B": "#60a5fa", "C": COLOR_ORANGE, "D": COLOR_GRAY},
         labels={"count": "数量", "level": ""},
     )
     return with_vertical_y_title(
@@ -134,7 +134,7 @@ def monthly_trend_chart(month_summary: pd.DataFrame) -> go.Figure:
             x=frame.get("review_month", []),
             y=frame.get("review_count", []),
             name="评论数",
-            marker_color="#94a3b8",
+            marker_color=COLOR_GRAY,
         )
     )
     fig.add_trace(
@@ -150,7 +150,7 @@ def monthly_trend_chart(month_summary: pd.DataFrame) -> go.Figure:
             x=frame.get("review_month", []),
             y=frame.get("ai_candidate_count", []),
             name="AI 候选数",
-            marker_color="#dc2626",
+            marker_color=COLOR_RED,
         )
     )
     fig.update_layout(
@@ -181,7 +181,7 @@ def sentiment_distribution_chart(frame: pd.DataFrame) -> go.Figure:
         y="情感分类构成",
         orientation="h",
         color="sentiment_label",
-        color_discrete_map={"P": COLOR_GREEN, "N": COLOR_RED, "M": COLOR_ORANGE, "Z": "#94a3b8"},
+        color_discrete_map={"P": COLOR_GREEN, "N": COLOR_RED, "M": COLOR_ORANGE, "Z": COLOR_GRAY},
         labels={"count": "数量", "sentiment_label": "情感代码", "情感分类构成": ""},
     )
     return with_vertical_y_title(

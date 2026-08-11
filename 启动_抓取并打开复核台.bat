@@ -68,8 +68,16 @@ if errorlevel 1 goto fail
 echo.
 echo [3/3] Starting review UI...
 echo Starting review UI... >> "%LOG%"
-start "" "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -WindowStyle Hidden -Command "Start-Sleep -Seconds 5; Start-Process 'http://localhost:8501'"
-"%PYTHON%" -m streamlit run "%~dp0app.py" --server.port 8501 --server.address localhost
+set "PORT="
+for /f "usebackq delims=" %%P in (`"%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -Command "$p=8501; while($p -le 65535) { $l=$null; try { $l=[Net.Sockets.TcpListener]::new([Net.IPAddress]::Any,$p); $l.Start(); $l.Stop(); Write-Output $p; break } catch [Net.Sockets.SocketException] { if($null -ne $l){$l.Stop()}; $p++ } }; if($p -gt 65535){exit 1}"`) do set "PORT=%%P"
+if not defined PORT (
+  echo No available TCP port was found at or above 8501. >> "%LOG%"
+  goto fail
+)
+echo Review UI port: %PORT% >> "%LOG%"
+echo Review UI URL: http://localhost:%PORT%
+start "" "%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -WindowStyle Hidden -Command "Start-Sleep -Seconds 5; Start-Process 'http://localhost:%PORT%'"
+"%PYTHON%" -m streamlit run "%~dp0app.py" --server.port %PORT% --server.address localhost
 set "EXITCODE=%ERRORLEVEL%"
 
 if not "%EXITCODE%"=="0" goto fail

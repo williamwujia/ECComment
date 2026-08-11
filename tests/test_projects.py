@@ -8,6 +8,7 @@ from ui.projects import (
     project_alias,
     save_project_alias,
 )
+from tracker_ui import matching_workbook_option
 
 
 def test_default_project_alias_shortens_long_output_name():
@@ -41,3 +42,18 @@ def test_project_tooltip_uses_markdown_line_breaks_and_punctuation():
         "- **评论数量：** 135 条",
         "- **问大家数量：** 1,513 条",
     ]
+
+
+def test_matching_workbook_option_accepts_absolute_created_path(tmp_path: Path):
+    relative = Path("projects") / "新项目.xlsx"
+    absolute = (tmp_path / relative).resolve()
+    options = ["__new_project__", str(relative), "__manual_workbook__"]
+
+    original = Path.cwd()
+    try:
+        import os
+
+        os.chdir(tmp_path)
+        assert matching_workbook_option(str(absolute), options) == str(relative)
+    finally:
+        os.chdir(original)

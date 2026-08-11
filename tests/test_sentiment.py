@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import threading
+import time
 import unittest
 
 from sentiment_llm_fast import build_fast_user_prompt, parse_fast_jsonl, validate_fast_rows
@@ -24,6 +27,31 @@ class FakeTextClient:
                 '{"i":3,"s":"N","sc":2,"p":"-","n":"E","c":3}',
             ]
         ), {"completion_tokens": 40}
+
+class ConcurrentTextClient:
+    def __init__(self):
+        self.active = 0
+        self.peak_active = 0
+        self.lock = threading.Lock()
+        self.last_timing = {}
+
+    def chat_text(self, system_prompt: str, user_prompt: str, model: str | None = None, max_tokens: int = 2000):
+        with self.lock:
+            self.active += 1
+            self.peak_active = max(self.peak_active, self.active)
+        try:
+            time.sleep(0.05)
+            rows = []
+            for line in user_prompt.splitlines():
+                content_id = json.loads(line)["i"]
+                rows.append(json.dumps(
+                    {"i": content_id, "s": "P", "sc": 8, "p": "E", "n": "-", "c": 3},
+                    ensure_ascii=False,
+                ))
+            return "\n".join(rows), {}
+        finally:
+            with self.lock:
+                self.active -= 1
 
 
 class SentimentTests(unittest.TestCase):
@@ -55,9 +83,10 @@ class SentimentTests(unittest.TestCase):
         result = process_sentiment_for_comments(
             comments,
             client=FakeTextClient(),
-            model_name="deepseek-v4-flash",
+            model_name="DeepSeek-V4-Flash-0731",
             batch_size=50,
             detail_limit=1,
+            use_local_rules=True,
         )
         self.assertEqual(result.total_count, 3)
         self.assertEqual(result.rule_count, 1)
@@ -76,10 +105,35 @@ class SentimentTests(unittest.TestCase):
     def test_select_sentiment_targets_only_reviews_with_text_and_limit(self):
         rows = [
             {"content_id": 1, "content_role": "review", "content_text_clean": "很好"},
+            {"content_id": 4, "content_role": "followup", "content_text_clean": "追评也不错"},
             {"content_id": 2, "content_role": "question", "content_text_clean": "哪个好"},
             {"content_id": 3, "content_role": "review", "content_text_clean": " "},
         ]
-        self.assertEqual(select_sentiment_targets(rows, limit=2), rows[:1])
+        self.assertEqual(select_sentiment_targets(rows, limit=2), rows[:2])
+
+    def test_pipeline_uses_ten_concurrent_requests_for_hundreds_of_rows(self):
+        client = ConcurrentTextClient()
+        comments = [
+            {
+                "content_id": index,
+                "content_role": "review",
+                "content_text_clean": f"review {index}",
+            }
+            for index in range(1, 301)
+        ]
+        result = process_sentiment_for_comments(
+            comments,
+            client=client,
+            model_name="DeepSeek-V4-Flash-0731",
+            batch_size=50,
+            detail_limit=0,
+        )
+        self.assertGreaterEqual(client.peak_active, 10)
+        self.assertEqual(len(result.fast_rows), 300)
+        self.assertEqual(
+            [row["content_id"] for row in result.fast_rows],
+            list(range(1, 301)),
+        )
 
 
 if __name__ == "__main__":

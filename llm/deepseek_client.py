@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any
+
+from llm.provider_config import DEEPSEEK_V4_FLASH_MODEL, normalize_model_name
 
 
 def read_api_key_file(path: str | os.PathLike[str] | None) -> str:
@@ -37,9 +40,20 @@ class DeepSeekClient:
         if not self.api_key:
             raise RuntimeError("DeepSeek API key is not configured")
         self.base_url = (base_url or os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")).rstrip("/")
-        self.default_model = default_model or os.getenv("DEEPSEEK_DEFAULT_MODEL", "deepseek-v4-flash")
+        self.default_model = normalize_model_name(
+            default_model or os.getenv("DEEPSEEK_DEFAULT_MODEL") or DEEPSEEK_V4_FLASH_MODEL
+        )
         self.timeout = timeout
+        self._timing_local = threading.local()
         self.last_timing: dict[str, Any] = {}
+
+    @property
+    def last_timing(self) -> dict[str, Any]:
+        return getattr(self._timing_local, "value", {})
+
+    @last_timing.setter
+    def last_timing(self, value: dict[str, Any]) -> None:
+        self._timing_local.value = value
 
     def chat_json(
         self,
@@ -49,7 +63,7 @@ class DeepSeekClient:
         max_tokens: int = 2000,
     ) -> tuple[dict, dict | None, str]:
         started_at = time.perf_counter()
-        selected_model = model or self.default_model
+        selected_model = normalize_model_name(model or self.default_model)
         self.last_timing = {
             "model": selected_model,
             "max_tokens": max_tokens,
@@ -138,7 +152,7 @@ class DeepSeekClient:
         response_format: dict[str, Any] | None,
     ) -> dict:
         started_at = time.perf_counter()
-        selected_model = model or self.default_model
+        selected_model = normalize_model_name(model or self.default_model)
         self.last_timing = {
             "model": selected_model,
             "max_tokens": max_tokens,
