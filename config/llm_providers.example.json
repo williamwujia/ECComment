@@ -4,7 +4,7 @@
     "deepseek": {
       "api_key_file": "config/secrets/deepseek_api_key.txt",
       "base_url": "https://api.deepseek.com",
-      "default_model": "deepseek-v4-flash",
+      "default_model": "DeepSeek-V4-Flash-0731",
       "default_batch_size": 50,
       "timeout_seconds": 90,
       "target_content_count": 500,

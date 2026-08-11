@@ -915,7 +915,7 @@ def run_incremental_sentiment(
                 selected_model = (
                     model
                     or provider_config.default_model
-                    or "deepseek-v4-flash"
+                    or "DeepSeek-V4-Flash-0731"
                 )
                 api_key_file = provider_config.api_key_file
                 if api_key_file and not Path(api_key_file).expanduser().is_absolute():

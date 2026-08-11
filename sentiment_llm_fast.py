@@ -99,7 +99,8 @@ class FastSentimentLLM:
         concurrency: int = 100,
     ) -> FastSentimentBatchResult:
         result = FastSentimentBatchResult()
-        size = max(batch_size, 1)
+        worker_count = max(int(concurrency or 1), 1)
+        size = min(max(batch_size, 1), max(len(comments) // worker_count, 1))
         batches = [
             comments[index : index + size]
             for index in range(0, len(comments), size)
@@ -113,7 +114,7 @@ class FastSentimentLLM:
             return batch_result
 
         with ThreadPoolExecutor(
-            max_workers=min(max(int(concurrency or 1), 1), len(batches)),
+            max_workers=min(worker_count, len(batches)),
             thread_name_prefix="sentiment-fast",
         ) as executor:
             # map preserves input batch order while requests run concurrently.

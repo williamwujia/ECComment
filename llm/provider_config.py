@@ -6,6 +6,20 @@ from pathlib import Path
 from typing import Any
 
 
+DEEPSEEK_V4_FLASH_MODEL = "DeepSeek-V4-Flash-0731"
+_DEEPSEEK_V4_FLASH_ALIASES = {
+    "deepseek-v4-flash",
+    "deepseek-v4-flash-preview",
+}
+
+
+def normalize_model_name(model: str | None) -> str:
+    value = str(model or "").strip()
+    if value.casefold() in _DEEPSEEK_V4_FLASH_ALIASES:
+        return DEEPSEEK_V4_FLASH_MODEL
+    return value
+
+
 @dataclass
 class ProviderConfig:
     provider: str
@@ -41,7 +55,7 @@ def load_provider_config(
         provider=selected,
         api_key_file=api_key_file_override or str(data.get("api_key_file", "")),
         base_url=str(data.get("base_url", "")),
-        default_model=str(data.get("default_model", "")),
+        default_model=normalize_model_name(data.get("default_model", "")),
         default_batch_size=int(data.get("default_batch_size") or data.get("batch_size") or 1),
         timeout_seconds=int(data.get("timeout_seconds") or data.get("timeout") or 90),
         target_content_count=int(data.get("target_content_count") or 500),

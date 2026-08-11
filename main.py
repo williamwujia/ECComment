@@ -305,7 +305,7 @@ def run_llm_analysis(args: argparse.Namespace, contents: list[dict], logger) -> 
     api_key_file = provider_config.api_key_file
     if api_key_file and not Path(api_key_file).expanduser().is_absolute():
         api_key_file = str(PROJECT_DIR / api_key_file)
-    model_name = args.llm_model or provider_config.default_model or "deepseek-v4-flash"
+    model_name = args.llm_model or provider_config.default_model or "DeepSeek-V4-Flash-0731"
 
     service = LLMCommentAnalysisService(
         deepseek_client=DeepSeekClient(
@@ -369,7 +369,7 @@ def run_sentiment_analysis(args: argparse.Namespace, contents: list[dict], logge
     api_key_file = provider_config.api_key_file
     if api_key_file and not Path(api_key_file).expanduser().is_absolute():
         api_key_file = str(PROJECT_DIR / api_key_file)
-    model_name = args.llm_model or provider_config.default_model or "deepseek-v4-flash"
+    model_name = args.llm_model or provider_config.default_model or "DeepSeek-V4-Flash-0731"
     logger.info(
         "Sentiment fast batch=%d detail batch=%d detail limit=%s timeout=%d",
         args.sentiment_batch_size,
