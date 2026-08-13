@@ -36,6 +36,8 @@ from ui.tracker_metrics import (
     build_sentiment_metrics,
     sentiment_series,
 )
+from ui.sales_progress import build_sales_progress
+from ui.update_reminders import stale_sku_updates
 
 
 if __name__ == "__main__":
@@ -46,6 +48,7 @@ if __name__ == "__main__":
 
 BRAND_PAGES = [
     "品牌总览",
+    "销售进展",
     "评论洞察",
     "购前评论",
     "AI 影响",
@@ -132,6 +135,7 @@ def main() -> None:
         project_ids,
         format_func=lambda value: project_display_name(sheets, value),
     )
+    render_stale_sku_reminder(sheets, project_id)
     pages = MAINTENANCE_PAGES if maintenance else BRAND_PAGES
     page = st.sidebar.radio("页面", pages)
     if maintenance:
@@ -142,6 +146,8 @@ def main() -> None:
 
     if page == "品牌总览":
         render_brand_overview(sheets, project_id)
+    elif page == "销售进展":
+        render_sales_progress(sheets, project_id)
     elif page == "评论洞察":
         render_brand_reviews(sheets, project_id)
     elif page == "购前评论":
@@ -344,6 +350,23 @@ def render_brand_overview(
         "来源口径：前三项仅统计淘宝/天猫；全部内容包含所有已导入来源。"
         f" 全部内容来源分布：{source_breakdown or '暂无内容'}。"
     )
+
+    progress = sales_progress_frame(sheets, project_id)
+    tracked = (
+        progress[progress["new_reviews"].notna()]
+        if not progress.empty
+        else progress
+    )
+    if not tracked.empty:
+        recent_counts = pd.to_numeric(
+            tracked["new_reviews"], errors="coerce"
+        ).fillna(0)
+        latest_new = int(recent_counts.sum())
+        active_products = int(recent_counts.gt(0).sum())
+        st.info(
+            f"销售活跃度提示：各商品最近一期共发现 {latest_new:,} 条新增评论，"
+            f"涉及 {active_products:,} 个商品。可在“销售进展”查看按商品趋势。"
+        )
 
     evidence = overview["evidence_counts"]
     funnel_summary = {
@@ -935,6 +958,90 @@ def render_brand_products(
     st.dataframe(shown[columns], width="stretch", hide_index=True)
 
 
+def render_sales_progress(
+    sheets: dict[str, pd.DataFrame],
+    project_id: str,
+) -> None:
+    st.title("销售进展")
+    st.caption(
+        "以两次追踪之间首次发现的评论增长推测销售活跃度；这是代理指标，"
+        "不等于真实订单或销量。首个快照只用于建立基线。"
+    )
+    progress = sales_progress_frame(sheets, project_id)
+    if progress.empty:
+        st.info("当前还没有可用于判断销售进展的商品快照。")
+        return
+
+    tracked = progress[progress["new_reviews"].notna()].copy()
+    if tracked.empty:
+        st.info("已建立评论基线；至少再更新一次后，才能判断评论增长。")
+    else:
+        new_reviews = pd.to_numeric(
+            tracked["new_reviews"], errors="coerce"
+        ).fillna(0)
+        daily = pd.to_numeric(tracked["reviews_per_day"], errors="coerce")
+        metrics = st.columns(4)
+        metrics[0].metric("本期新增评论", f"{int(new_reviews.sum()):,}")
+        metrics[1].metric("有新增的商品", f"{int(new_reviews.gt(0).sum()):,}")
+        metrics[2].metric("已比较商品", f"{len(tracked):,}")
+        metrics[3].metric(
+            "合计评论增速",
+            f"{daily.sum():.2f} 条/天" if daily.notna().any() else "暂无",
+        )
+
+    shown = progress.copy()
+    shown["商品"] = shown["product_title"].where(
+        shown["product_title"].fillna("").astype(str).str.strip().ne(""),
+        shown["item_key"],
+    )
+    shown["最近更新"] = shown["latest_capture_time"].map(
+        lambda value: value.strftime("%Y-%m-%d") if not pd.isna(value) else "暂无"
+    )
+    shown["本期间隔"] = shown["interval_days"].map(
+        lambda value: "基线" if pd.isna(value) else f"{float(value):g} 天"
+    )
+    shown["本期新增评论"] = shown["new_reviews"].map(
+        lambda value: "基线" if pd.isna(value) else f"{int(value):,}"
+    )
+    shown["评论增速"] = shown["reviews_per_day"].map(
+        lambda value: "暂无" if pd.isna(value) else f"{float(value):.2f} 条/天"
+    )
+    shown["环比变化"] = shown["rate_change"].map(
+        lambda value: "暂无" if pd.isna(value) else f"{float(value):+.1%}"
+    )
+    st.dataframe(
+        shown[
+            [
+                "商品",
+                "trend",
+                "tracked_review_count",
+                "本期新增评论",
+                "本期间隔",
+                "评论增速",
+                "环比变化",
+                "最近更新",
+            ]
+        ].rename(
+            columns={
+                "trend": "活跃度判断",
+                "tracked_review_count": "累计跟踪评论",
+            }
+        ),
+        width="stretch",
+        hide_index=True,
+    )
+
+
+def sales_progress_frame(
+    sheets: dict[str, pd.DataFrame], project_id: str
+) -> pd.DataFrame:
+    return build_sales_progress(
+        project_frame(sheets.get("content_master", pd.DataFrame()), project_id),
+        project_frame(sheets.get("snapshots", pd.DataFrame()), project_id),
+        project_frame(sheets.get("products", pd.DataFrame()), project_id),
+    )
+
+
 def render_brand_guide() -> None:
     st.title("看板说明")
     st.markdown(
@@ -942,6 +1049,7 @@ def render_brand_guide() -> None:
 这个入口面向品牌侧查看者，只负责查看和导出，不承担数据更新。
 
 - **品牌总览**：查看评论、问大家、情绪分类和 AI 影响 A–D 分级。
+- **销售进展**：用相邻快照间的评论增长观察商品销售活跃度变化；该指标不等于真实销量。
 - **评论洞察**：按商品、情绪和 AI 等级筛选评论，查看表扬点与抱怨点。
 - **购前评论**：单独查看消费者买前的比较、选择、顾虑和决策证据。
 - **AI 影响**：查看逐月三色趋势，并集中查看 A–D 各级证据及对应原文。
@@ -981,6 +1089,40 @@ def render_maintenance_quality(
     cards[2].metric("警告或失败", f"{warning_count:,}")
     cards[3].metric("待复核", f"{unresolved_count(queue):,}")
     render_history(sheets, project_id, show_title=False)
+
+
+def render_stale_sku_reminder(
+    sheets: dict[str, pd.DataFrame],
+    project_id: str,
+) -> None:
+    stale_items = stale_sku_updates(
+        project_frame(sheets.get("products", pd.DataFrame()), project_id),
+        project_frame(sheets.get("snapshots", pd.DataFrame()), project_id),
+    )
+    if stale_items.empty:
+        return
+
+    st.warning(f"更新提醒：本项目有 {len(stale_items)} 条待更新记录。")
+    with st.expander("查看待更新 SKU", expanded=False):
+        display = stale_items.copy()
+        display["last_update_at"] = display["last_update_at"].map(
+            lambda value: "暂无更新记录"
+            if pd.isna(value)
+            else value.strftime("%Y-%m-%d %H:%M")
+        )
+        display["days_since_update"] = display["days_since_update"].map(
+            lambda value: "暂无记录" if pd.isna(value) else f"{value} 天"
+        )
+        show_table(
+            display,
+            columns=[
+                "sku",
+                "product_title_current",
+                "last_update_at",
+                "days_since_update",
+            ],
+            height=min(320, 48 * (len(display) + 1)),
+        )
 
 
 def render_project_home(
