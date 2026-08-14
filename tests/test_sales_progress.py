@@ -2,87 +2,91 @@ from __future__ import annotations
 
 import pandas as pd
 
-from ui.sales_progress import build_sales_progress
+from ui.sales_progress import (
+    build_latest_sales_progress,
+    build_sales_history,
+    sales_date_coverage,
+)
 
 
-def test_first_snapshot_is_only_a_baseline() -> None:
-    snapshots = pd.DataFrame(
-        [{"snapshot_id": "s1", "item_key": "p1", "capture_time": "2026-08-01"}]
-    )
-    content = pd.DataFrame(
+def sample_content() -> pd.DataFrame:
+    return pd.DataFrame(
         [
-            {
-                "item_key": "p1",
-                "content_role": "review",
-                "first_seen_snapshot_id": "s1",
-            },
-            {
-                "item_key": "p1",
-                "content_role": "question",
-                "first_seen_snapshot_id": "s1",
-            },
+            {"item_key": "p1", "platform": "tmall", "content_role": "review", "content_date": "2026-06-03"},
+            {"item_key": "p1", "content_role": "review", "content_time": "2026-06-20 12:00"},
+            {"item_key": "p1", "content_role": "followup", "content_date": "2026-06-25"},
+            {"item_key": "p1", "content_role": "review", "content_date": "2026-07-01"},
+            {"item_key": "p1", "content_role": "review", "content_date": "2026-07-08"},
+            {"item_key": "p1", "content_role": "review", "content_date": "2026-07-12"},
+            {"item_key": "p2", "content_role": "review", "content_date": "2026-07-15"},
+            {"item_key": "p2", "content_role": "review", "content_date": ""},
+            {"item_key": "p2", "content_role": "question", "content_date": "2026-07-16"},
         ]
     )
 
-    result = build_sales_progress(content, snapshots, pd.DataFrame()).iloc[0]
 
-    assert result["tracked_review_count"] == 1
-    assert pd.isna(result["new_reviews"])
-    assert result["trend"] == "已建立基线"
-
-
-def test_review_growth_is_normalized_by_update_interval() -> None:
-    snapshots = pd.DataFrame(
-        [
-            {"snapshot_id": "s1", "item_key": "p1", "capture_time": "2026-08-01"},
-            {"snapshot_id": "s2", "item_key": "p1", "capture_time": "2026-08-05"},
-            {"snapshot_id": "s3", "item_key": "p1", "capture_time": "2026-08-07"},
-        ]
-    )
-    content = pd.DataFrame(
-        [
-            {
-                "item_key": "p1",
-                "content_role": "review",
-                "first_seen_snapshot_id": snapshot_id,
-            }
-            for snapshot_id in ["s1", "s2", "s2", "s3", "s3", "s3", "s3"]
-        ]
-    )
+def test_estimates_monthly_sales_from_review_dates_at_five_percent() -> None:
     products = pd.DataFrame(
-        [{"item_key": "p1", "product_title_current": "测试商品"}]
+        [{"item_key": "p1", "platform": "tmall", "product_title_current": "测试商品"}]
     )
+    history = build_sales_history(sample_content(), products)
+    p1 = history[history["item_key"].eq("p1")].set_index("sales_month")
 
-    result = build_sales_progress(content, snapshots, products).iloc[0]
+    assert p1.loc["2026-06", "review_count"] == 2
+    assert p1.loc["2026-06", "estimated_sales"] == 40
+    assert p1.loc["2026-07", "review_count"] == 3
+    assert p1.loc["2026-07", "estimated_sales"] == 60
+    assert p1.loc["2026-07", "sales_change"] == 0.5
+    assert p1.loc["2026-07", "trend"] == "销量上升"
+    assert p1.loc["2026-07", "product_title"] == "测试商品"
+    assert p1.loc["2026-07", "product_display_name"] == "[天猫] 测试商品"
+    assert p1.loc["2026-07", "platform"] == "tmall"
 
-    assert result["product_title"] == "测试商品"
-    assert result["interval_days"] == 2
-    assert result["new_reviews"] == 4
-    assert result["reviews_per_day"] == 2
-    assert result["previous_reviews_per_day"] == 0.5
-    assert result["rate_change"] == 3
-    assert result["trend"] == "活跃度上升"
+
+def test_excludes_followups_questions_and_undated_reviews() -> None:
+    history = build_sales_history(sample_content(), pd.DataFrame())
+    coverage = sales_date_coverage(sample_content())
+
+    assert history["review_count"].sum() == 6
+    assert coverage == {
+        "total_reviews": 7,
+        "dated_reviews": 6,
+        "undated_reviews": 1,
+        "coverage": 6 / 7,
+    }
 
 
-def test_no_new_review_is_reported_without_claiming_no_sales() -> None:
-    snapshots = pd.DataFrame(
-        [
-            {"snapshot_id": "s1", "item_key": "p1", "capture_time": "2026-08-01"},
-            {"snapshot_id": "s2", "item_key": "p1", "capture_time": "2026-08-08"},
-        ]
-    )
+def test_latest_progress_uses_latest_month_for_each_product() -> None:
+    latest = build_latest_sales_progress(
+        build_sales_history(sample_content(), pd.DataFrame())
+    ).set_index("item_key")
+
+    assert latest.loc["p1", "sales_month"] == "2026-07"
+    assert latest.loc["p1", "estimated_sales"] == 60
+    assert latest.loc["p2", "estimated_sales"] == 20
+
+
+def test_review_rate_must_be_valid() -> None:
+    try:
+        build_sales_history(sample_content(), pd.DataFrame(), review_rate=0)
+    except ValueError as exc:
+        assert "review_rate" in str(exc)
+    else:
+        raise AssertionError("zero review rate should be rejected")
+
+
+def test_product_name_marks_jd_platform_from_item_key() -> None:
     content = pd.DataFrame(
         [
             {
-                "item_key": "p1",
+                "item_key": "jd:123",
                 "content_role": "review",
-                "first_seen_snapshot_id": "s1",
+                "content_date": "2026-07-01",
             }
         ]
     )
 
-    result = build_sales_progress(content, snapshots, pd.DataFrame()).iloc[0]
+    row = build_sales_history(content, pd.DataFrame()).iloc[0]
 
-    assert result["new_reviews"] == 0
-    assert result["reviews_per_day"] == 0
-    assert result["trend"] == "本期暂无新增评论"
+    assert row["product_display_name"] == "[京东] jd:123"
+    assert row["platform"] == "jd"

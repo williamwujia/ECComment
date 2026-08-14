@@ -3,174 +3,171 @@ from __future__ import annotations
 import pandas as pd
 
 
-REVIEW_ROLES = {"review", "followup"}
+DEFAULT_REVIEW_RATE = 0.05
+PLATFORM_LABELS = {
+    "tmall": "天猫",
+    "taobao": "淘宝",
+    "jd": "京东",
+}
 
 
-def build_sales_progress(
+def build_sales_history(
     content: pd.DataFrame,
-    snapshots: pd.DataFrame,
     products: pd.DataFrame,
+    *,
+    review_rate: float = DEFAULT_REVIEW_RATE,
 ) -> pd.DataFrame:
-    """Build a review-growth proxy for recent product sales activity.
+    """Estimate monthly sales from dated primary reviews."""
+    if not 0 < review_rate <= 1:
+        raise ValueError("review_rate 必须大于 0 且不超过 1")
 
-    The result deliberately reports review growth instead of converting reviews
-    into order counts.  A product's first snapshot is a baseline; only comments
-    first observed in later snapshots are treated as interval growth.
-    """
     columns = [
         "item_key",
         "product_title",
-        "snapshot_count",
-        "tracked_review_count",
-        "latest_capture_time",
-        "interval_days",
-        "new_reviews",
-        "reviews_per_day",
-        "previous_reviews_per_day",
-        "rate_change",
+        "product_display_name",
+        "platform",
+        "sales_month",
+        "review_count",
+        "estimated_sales",
+        "previous_estimated_sales",
+        "sales_change",
         "trend",
     ]
-    if snapshots.empty or "item_key" not in snapshots.columns:
+    dated = _dated_primary_reviews(content)
+    if dated.empty:
         return pd.DataFrame(columns=columns)
 
-    snapshot_rows = snapshots.copy()
-    snapshot_rows["item_key"] = _text_series(snapshot_rows, "item_key")
-    snapshot_rows["snapshot_id"] = _text_series(snapshot_rows, "snapshot_id")
-    snapshot_rows["_capture"] = pd.to_datetime(
-        snapshot_rows.get("capture_time"), errors="coerce"
+    product_meta = _product_metadata(products, content)
+    summary = (
+        dated.groupby(["item_key", "sales_month"], as_index=False)
+        .size()
+        .rename(columns={"size": "review_count"})
+        .sort_values(["item_key", "sales_month"])
     )
-    snapshot_rows = snapshot_rows[
-        snapshot_rows["item_key"].ne("") & snapshot_rows["_capture"].notna()
-    ].copy()
-    if snapshot_rows.empty:
-        return pd.DataFrame(columns=columns)
+    summary["product_title"] = summary["item_key"].map(
+        lambda key: product_meta.get(key, {}).get("title", "")
+    )
+    summary["platform"] = summary["item_key"].map(
+        lambda key: product_meta.get(key, {}).get("platform", "")
+    )
+    missing_platform = summary["platform"].eq("")
+    summary.loc[missing_platform, "platform"] = summary.loc[
+        missing_platform, "item_key"
+    ].map(lambda key: key.split(":", 1)[0] if ":" in key else "")
+    summary["product_display_name"] = summary.apply(
+        lambda row: _display_name(
+            row["item_key"], row["product_title"], row["platform"]
+        ),
+        axis=1,
+    )
+    summary["estimated_sales"] = summary["review_count"] / review_rate
+    summary["previous_estimated_sales"] = summary.groupby("item_key")[
+        "estimated_sales"
+    ].shift(1)
+    summary["sales_change"] = summary.groupby("item_key")[
+        "estimated_sales"
+    ].pct_change(fill_method=None)
+    summary["trend"] = summary.apply(_trend_label, axis=1)
+    return summary[columns].reset_index(drop=True)
 
-    reviews = content.copy()
-    roles = _text_series(reviews, "content_role").str.casefold()
-    reviews = reviews[roles.isin(REVIEW_ROLES)].copy()
-    reviews["item_key"] = _text_series(reviews, "item_key")
-    reviews["first_seen_snapshot_id"] = _text_series(
-        reviews, "first_seen_snapshot_id"
-    )
-    new_by_snapshot = (
-        reviews.groupby(["item_key", "first_seen_snapshot_id"]).size()
-        if not reviews.empty
-        else pd.Series(dtype="int64")
-    )
-    total_by_item = (
-        reviews.groupby("item_key").size()
-        if not reviews.empty
-        else pd.Series(dtype="int64")
-    )
-    titles = _product_titles(products)
 
-    rows: list[dict] = []
-    for item_key, group in snapshot_rows.groupby("item_key", sort=False):
-        history = group.sort_values(["_capture", "snapshot_id"]).drop_duplicates(
-            "snapshot_id", keep="last"
-        )
-        latest = history.iloc[-1]
-        snapshot_count = len(history)
-        row = {
-            "item_key": item_key,
-            "product_title": titles.get(item_key, ""),
-            "snapshot_count": snapshot_count,
-            "tracked_review_count": int(total_by_item.get(item_key, 0)),
-            "latest_capture_time": latest["_capture"],
-            "interval_days": pd.NA,
-            "new_reviews": pd.NA,
-            "reviews_per_day": pd.NA,
-            "previous_reviews_per_day": pd.NA,
-            "rate_change": pd.NA,
-            "trend": "已建立基线",
-        }
-        if snapshot_count >= 2:
-            interval = _interval_metrics(history, snapshot_count - 1, new_by_snapshot)
-            row.update(interval)
-            previous_rate = pd.NA
-            if snapshot_count >= 3:
-                previous = _interval_metrics(
-                    history, snapshot_count - 2, new_by_snapshot
-                )
-                previous_rate = previous["reviews_per_day"]
-            row["previous_reviews_per_day"] = previous_rate
-            row["rate_change"] = _rate_change(
-                row["reviews_per_day"], previous_rate
-            )
-            row["trend"] = _trend(
-                int(row["new_reviews"]), row["reviews_per_day"], previous_rate
-            )
-        rows.append(row)
-
-    return pd.DataFrame(rows, columns=columns).sort_values(
-        ["reviews_per_day", "tracked_review_count"],
-        ascending=[False, False],
-        na_position="last",
+def build_latest_sales_progress(history: pd.DataFrame) -> pd.DataFrame:
+    if history.empty:
+        return history.copy()
+    return (
+        history.sort_values(["item_key", "sales_month"])
+        .groupby("item_key", as_index=False)
+        .tail(1)
+        .sort_values("estimated_sales", ascending=False)
+        .reset_index(drop=True)
     )
 
 
-def _interval_metrics(
-    history: pd.DataFrame,
-    position: int,
-    new_by_snapshot: pd.Series,
-) -> dict:
-    current = history.iloc[position]
-    previous = history.iloc[position - 1]
-    elapsed_days = max(
-        (current["_capture"] - previous["_capture"]).total_seconds() / 86400,
-        0,
-    )
-    new_reviews = int(
-        new_by_snapshot.get((current["item_key"], current["snapshot_id"]), 0)
-    )
+def sales_date_coverage(content: pd.DataFrame) -> dict[str, int | float]:
+    roles = _text_series(content, "content_role").str.casefold()
+    reviews = content[roles.eq("review")].copy()
+    total = len(reviews)
+    dated = len(_dated_primary_reviews(reviews))
     return {
-        "interval_days": elapsed_days,
-        "new_reviews": new_reviews,
-        "reviews_per_day": new_reviews / elapsed_days if elapsed_days else pd.NA,
+        "total_reviews": total,
+        "dated_reviews": dated,
+        "undated_reviews": max(total - dated, 0),
+        "coverage": dated / total if total else 0.0,
     }
 
 
-def _rate_change(current: object, previous: object) -> object:
-    if pd.isna(current) or pd.isna(previous):
-        return pd.NA
-    current_value = float(current)
-    previous_value = float(previous)
-    if previous_value == 0:
-        return pd.NA
-    return current_value / previous_value - 1
+def _dated_primary_reviews(content: pd.DataFrame) -> pd.DataFrame:
+    if content.empty:
+        return pd.DataFrame(columns=["item_key", "sales_month"])
+    roles = _text_series(content, "content_role").str.casefold()
+    reviews = content[roles.eq("review")].copy()
+    if reviews.empty:
+        return pd.DataFrame(columns=["item_key", "sales_month"])
+    reviews["item_key"] = _text_series(reviews, "item_key")
+    dates = pd.Series(pd.NaT, index=reviews.index, dtype="datetime64[ns]")
+    for column in ("content_date", "content_time", "review_date"):
+        if column not in reviews.columns:
+            continue
+        dates = dates.fillna(pd.to_datetime(reviews[column], errors="coerce"))
+    reviews = reviews[reviews["item_key"].ne("") & dates.notna()].copy()
+    reviews["sales_month"] = dates.loc[reviews.index].dt.strftime("%Y-%m")
+    return reviews
 
 
-def _trend(new_reviews: int, current: object, previous: object) -> str:
-    if pd.isna(current):
-        return "更新间隔无效"
-    if new_reviews == 0:
-        return "本期暂无新增评论"
+def _trend_label(row: pd.Series) -> str:
+    previous = row["previous_estimated_sales"]
+    change = row["sales_change"]
     if pd.isna(previous):
-        return "已有评论增长"
-    previous_value = float(previous)
-    current_value = float(current)
-    if previous_value == 0:
-        return "活跃度上升"
-    change = current_value / previous_value - 1
-    if change >= 0.2:
-        return "活跃度上升"
-    if change <= -0.2:
-        return "活跃度回落"
-    return "活跃度平稳"
+        return "首个有数据月份"
+    if change > 0:
+        return "销量上升"
+    if change < 0:
+        return "销量下降"
+    return "销量持平"
 
 
-def _product_titles(products: pd.DataFrame) -> dict[str, str]:
+def _product_metadata(
+    products: pd.DataFrame, content: pd.DataFrame
+) -> dict[str, dict[str, str]]:
+    result: dict[str, dict[str, str]] = {}
+    if not content.empty and "item_key" in content.columns:
+        content_rows = content.copy()
+        content_rows["item_key"] = _text_series(content_rows, "item_key")
+        content_rows["platform"] = _text_series(content_rows, "platform")
+        for key, rows in content_rows.groupby("item_key", sort=False):
+            if key:
+                platforms = rows["platform"][rows["platform"].ne("")]
+                result[key] = {
+                    "title": "",
+                    "platform": platforms.iloc[-1] if not platforms.empty else "",
+                }
     if products.empty or "item_key" not in products.columns:
-        return {}
+        return result
     frame = products.copy()
     frame["item_key"] = _text_series(frame, "item_key")
+    frame["platform"] = _text_series(frame, "platform")
     frame["product_title_current"] = _text_series(
         frame, "product_title_current"
     )
     frame = frame[frame["item_key"].ne("")].drop_duplicates(
         "item_key", keep="last"
     )
-    return frame.set_index("item_key")["product_title_current"].to_dict()
+    for _, row in frame.iterrows():
+        key = row["item_key"]
+        platform = row["platform"] or result.get(key, {}).get("platform", "")
+        result[key] = {
+            "title": row["product_title_current"],
+            "platform": platform,
+        }
+    return result
+
+
+def _display_name(item_key: str, title: str, platform: str) -> str:
+    normalized = str(platform).strip().casefold()
+    if not normalized and ":" in item_key:
+        normalized = item_key.split(":", 1)[0].casefold()
+    platform_name = PLATFORM_LABELS.get(normalized, normalized.upper() or "未知平台")
+    return f"[{platform_name}] {title or item_key}"
 
 
 def _text_series(frame: pd.DataFrame, column: str) -> pd.Series:

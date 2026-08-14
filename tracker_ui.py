@@ -36,7 +36,12 @@ from ui.tracker_metrics import (
     build_sentiment_metrics,
     sentiment_series,
 )
-from ui.sales_progress import build_sales_progress
+from ui.sales_progress import (
+    DEFAULT_REVIEW_RATE,
+    build_latest_sales_progress,
+    build_sales_history,
+    sales_date_coverage,
+)
 from ui.update_reminders import stale_sku_updates
 
 
@@ -351,21 +356,13 @@ def render_brand_overview(
         f" 全部内容来源分布：{source_breakdown or '暂无内容'}。"
     )
 
-    progress = sales_progress_frame(sheets, project_id)
-    tracked = (
-        progress[progress["new_reviews"].notna()]
-        if not progress.empty
-        else progress
-    )
-    if not tracked.empty:
-        recent_counts = pd.to_numeric(
-            tracked["new_reviews"], errors="coerce"
-        ).fillna(0)
-        latest_new = int(recent_counts.sum())
-        active_products = int(recent_counts.gt(0).sum())
+    history = sales_history_frame(sheets, project_id)
+    latest = build_latest_sales_progress(history)
+    if not latest.empty:
+        latest_sales = int(latest["estimated_sales"].sum())
         st.info(
-            f"销售活跃度提示：各商品最近一期共发现 {latest_new:,} 条新增评论，"
-            f"涉及 {active_products:,} 个商品。可在“销售进展”查看按商品趋势。"
+            "销售进展提示：按 5% 评论率估算，各商品最近有数据月份"
+            f"合计约 {latest_sales:,} 单。可在“销售进展”查看按月变化。"
         )
 
     evidence = overview["evidence_counts"]
@@ -964,67 +961,71 @@ def render_sales_progress(
 ) -> None:
     st.title("销售进展")
     st.caption(
-        "以两次追踪之间首次发现的评论增长推测销售活跃度；这是代理指标，"
-        "不等于真实订单或销量。首个快照只用于建立基线。"
+        "按评论自身日期统计自然月评论数，并假设 5% 的客户会评论："
+        "估算销量 = 评论数 ÷ 5%（每条评论约对应 20 单）。"
+        "这是模型估算，不是平台真实订单数据；评论可能晚于购买发生，"
+        "未结束月份仅代表截至当前已采集的评论。"
     )
-    progress = sales_progress_frame(sheets, project_id)
-    if progress.empty:
-        st.info("当前还没有可用于判断销售进展的商品快照。")
+    content = project_frame(
+        sheets.get("content_master", pd.DataFrame()), project_id
+    )
+    history = sales_history_frame(sheets, project_id)
+    coverage = sales_date_coverage(content)
+    if history.empty:
+        st.info("当前没有带有效评论日期的主评论，暂时无法估算销量变化。")
         return
 
-    tracked = progress[progress["new_reviews"].notna()].copy()
-    if tracked.empty:
-        st.info("已建立评论基线；至少再更新一次后，才能判断评论增长。")
-    else:
-        new_reviews = pd.to_numeric(
-            tracked["new_reviews"], errors="coerce"
-        ).fillna(0)
-        daily = pd.to_numeric(tracked["reviews_per_day"], errors="coerce")
-        metrics = st.columns(4)
-        metrics[0].metric("本期新增评论", f"{int(new_reviews.sum()):,}")
-        metrics[1].metric("有新增的商品", f"{int(new_reviews.gt(0).sum()):,}")
-        metrics[2].metric("已比较商品", f"{len(tracked):,}")
-        metrics[3].metric(
-            "合计评论增速",
-            f"{daily.sum():.2f} 条/天" if daily.notna().any() else "暂无",
+    latest = build_latest_sales_progress(history)
+    latest_period = history["sales_month"].max()
+    period_rows = history[history["sales_month"].eq(latest_period)]
+    metrics = st.columns(4)
+    metrics[0].metric("最近月份", latest_period)
+    metrics[1].metric("当月评论", f"{int(period_rows['review_count'].sum()):,}")
+    metrics[2].metric(
+        "当月估算销量",
+        f"约 {int(period_rows['estimated_sales'].sum()):,} 单",
+    )
+    metrics[3].metric("评论日期覆盖率", f"{coverage['coverage']:.1%}")
+    if coverage["undated_reviews"]:
+        st.warning(
+            f"有 {coverage['undated_reviews']:,} 条主评论缺少有效日期，"
+            "未计入月度销量估算。"
         )
 
-    shown = progress.copy()
-    shown["商品"] = shown["product_title"].where(
-        shown["product_title"].fillna("").astype(str).str.strip().ne(""),
-        shown["item_key"],
+    chart_rows = history.copy()
+    chart_rows["商品"] = chart_rows["product_display_name"]
+    chart = px.line(
+        chart_rows,
+        x="sales_month",
+        y="estimated_sales",
+        color="商品",
+        markers=True,
+        labels={"sales_month": "评论月份", "estimated_sales": "估算销量"},
     )
-    shown["最近更新"] = shown["latest_capture_time"].map(
-        lambda value: value.strftime("%Y-%m-%d") if not pd.isna(value) else "暂无"
-    )
-    shown["本期间隔"] = shown["interval_days"].map(
-        lambda value: "基线" if pd.isna(value) else f"{float(value):g} 天"
-    )
-    shown["本期新增评论"] = shown["new_reviews"].map(
-        lambda value: "基线" if pd.isna(value) else f"{int(value):,}"
-    )
-    shown["评论增速"] = shown["reviews_per_day"].map(
-        lambda value: "暂无" if pd.isna(value) else f"{float(value):.2f} 条/天"
-    )
-    shown["环比变化"] = shown["rate_change"].map(
+    chart.update_layout(yaxis_title="估算销量（单，按 5% 评论率）")
+    st.plotly_chart(chart, width="stretch")
+
+    shown = latest.copy()
+    shown["商品"] = shown["product_display_name"]
+    shown["环比变化"] = shown["sales_change"].map(
         lambda value: "暂无" if pd.isna(value) else f"{float(value):+.1%}"
     )
     st.dataframe(
         shown[
             [
                 "商品",
+                "sales_month",
                 "trend",
-                "tracked_review_count",
-                "本期新增评论",
-                "本期间隔",
-                "评论增速",
+                "review_count",
+                "estimated_sales",
                 "环比变化",
-                "最近更新",
             ]
         ].rename(
             columns={
-                "trend": "活跃度判断",
-                "tracked_review_count": "累计跟踪评论",
+                "sales_month": "最近有数据月份",
+                "trend": "销量变化",
+                "review_count": "当月评论",
+                "estimated_sales": "估算销量（单）",
             }
         ),
         width="stretch",
@@ -1032,13 +1033,13 @@ def render_sales_progress(
     )
 
 
-def sales_progress_frame(
+def sales_history_frame(
     sheets: dict[str, pd.DataFrame], project_id: str
 ) -> pd.DataFrame:
-    return build_sales_progress(
+    return build_sales_history(
         project_frame(sheets.get("content_master", pd.DataFrame()), project_id),
-        project_frame(sheets.get("snapshots", pd.DataFrame()), project_id),
         project_frame(sheets.get("products", pd.DataFrame()), project_id),
+        review_rate=DEFAULT_REVIEW_RATE,
     )
 
 
@@ -1049,7 +1050,7 @@ def render_brand_guide() -> None:
 这个入口面向品牌侧查看者，只负责查看和导出，不承担数据更新。
 
 - **品牌总览**：查看评论、问大家、情绪分类和 AI 影响 A–D 分级。
-- **销售进展**：用相邻快照间的评论增长观察商品销售活跃度变化；该指标不等于真实销量。
+- **销售进展**：按评论日期统计月度评论数，并以 5% 评论率估算销量及环比变化。
 - **评论洞察**：按商品、情绪和 AI 等级筛选评论，查看表扬点与抱怨点。
 - **购前评论**：单独查看消费者买前的比较、选择、顾虑和决策证据。
 - **AI 影响**：查看逐月三色趋势，并集中查看 A–D 各级证据及对应原文。
