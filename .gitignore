@@ -5,6 +5,9 @@ output/*
 .browser_profiles/
 !output/.gitkeep
 
+# Local review-image asset library (SQLite, extracted images, and exports).
+ReviewAssets/
+
 __pycache__/
 .pytest_cache/
 *.py[cod]
