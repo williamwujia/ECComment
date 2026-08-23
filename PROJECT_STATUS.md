@@ -1,7 +1,7 @@
 # 项目状态（唯一当前入口）
 
 最后核对：2026-08-24
-当前分支：`codex/continuous-tracking-v2`
+当前分支：`codex/ecommerce-review-assistant`
 
 > 开始任何修改前先读本页。这里描述“现在是什么样”，历史变化见 `CHANGELOG.md`，重要取舍见 `docs/DECISIONS.md`。
 
