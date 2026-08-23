@@ -607,6 +607,63 @@ class TrackingTests(unittest.TestCase):
 
 
 class ReviewCsvImportTests(unittest.TestCase):
+    def test_combined_taobao_and_tmall_csv_reuses_existing_project_pipeline(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workbook = root / "project.xlsx"
+            csv_path = root / "ecommerce_reviews.csv"
+            create_project(str(workbook), "p1", "消费者反馈洞察")
+            pd.DataFrame(
+                [
+                    {
+                        "platform": "taobao",
+                        "product_id": "123456789",
+                        "product_url": "https://item.taobao.com/item.htm?id=123456789",
+                        "product_title": "淘宝测试商品",
+                        "shop_name": "淘宝测试店",
+                        "platform_content_id": "rate-1",
+                        "user_name_masked": "淘***户",
+                        "rating": "5",
+                        "review_time": "2026-08-20",
+                        "sku": "白色",
+                        "review_text_raw": "淘宝评论内容。",
+                    },
+                    {
+                        "platform": "tmall",
+                        "product_id": "987654321",
+                        "product_url": "https://detail.tmall.com/item.htm?id=987654321",
+                        "product_title": "天猫测试商品",
+                        "shop_name": "天猫测试店",
+                        "platform_content_id": "rate-2",
+                        "user_name_masked": "天***户",
+                        "rating": "4",
+                        "review_time": "2026-08-21",
+                        "sku": "黑色",
+                        "review_text_raw": "天猫评论内容。",
+                    },
+                ]
+            ).to_csv(csv_path, index=False, encoding="utf-8-sig")
+
+            results = update_project_files(
+                str(workbook), "p1", [str(csv_path)], enable_sentiment=False
+            )
+
+            products = pd.read_excel(workbook, sheet_name="products").fillna("")
+            contents = pd.read_excel(workbook, sheet_name="content_master").fillna("")
+            self.assertEqual(len(results), 2)
+            self.assertEqual(
+                set(products["item_key"]),
+                {"taobao:123456789", "tmall:987654321"},
+            )
+            self.assertEqual(
+                set(contents["platform_content_id"]),
+                {"rate-1", "rate-2"},
+            )
+            self.assertEqual(
+                set(contents["content_text_clean"]),
+                {"淘宝评论内容。", "天猫评论内容。"},
+            )
+
     def test_combined_jd_csv_is_split_and_merged_into_project(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

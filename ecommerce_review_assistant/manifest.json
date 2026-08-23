@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "电商评论更新助手",
+  "version": "0.1.0",
+  "description": "在日常 Chrome 登录会话中批量采集淘宝、天猫和京东最新商品评价",
+  "permissions": ["storage", "tabs", "downloads", "alarms"],
+  "host_permissions": [
+    "https://item.jd.com/*",
+    "https://item.taobao.com/*",
+    "https://detail.tmall.com/*",
+    "https://chaoshi.detail.tmall.com/*",
+    "https://detail.tmall.hk/*",
+    "https://login.taobao.com/*",
+    "https://login.tmall.com/*"
+  ],
+  "background": {"service_worker": "service_worker.js"},
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "电商评论更新助手"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://item.jd.com/*",
+        "https://item.taobao.com/*",
+        "https://detail.tmall.com/*",
+        "https://chaoshi.detail.tmall.com/*",
+        "https://detail.tmall.hk/*",
+        "https://login.taobao.com/*",
+        "https://login.tmall.com/*"
+      ],
+      "js": ["platform_adapters.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}
