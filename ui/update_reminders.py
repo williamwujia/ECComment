@@ -6,6 +6,16 @@ import pandas as pd
 
 
 REMINDER_AFTER_DAYS = 14
+PLATFORM_LABELS = {
+    "tmall": "天猫",
+    "taobao": "淘宝",
+    "jd": "京东",
+}
+
+
+def platform_display_name(value: object) -> str:
+    normalized = str(value).strip()
+    return PLATFORM_LABELS.get(normalized.casefold(), normalized or "未标明")
 
 
 def stale_sku_updates(
@@ -18,6 +28,7 @@ def stale_sku_updates(
     """Return SKUs whose latest update record is older than the threshold."""
     columns = [
         "item_key",
+        "platform",
         "sku",
         "product_title_current",
         "last_update_at",
@@ -58,6 +69,9 @@ def stale_sku_updates(
         return pd.DataFrame(columns=columns)
 
     details = product_rows.set_index("item_key")
+    result["platform"] = details.get(
+        "platform", pd.Series(dtype=str)
+    ).reindex(result["item_key"]).fillna("").astype(str).to_numpy()
     result["sku"] = details.get("platform_product_id", pd.Series(dtype=str)).reindex(
         result["item_key"]
     ).fillna("").astype(str).to_numpy()

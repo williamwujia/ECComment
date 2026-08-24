@@ -51,12 +51,20 @@ function rowKey(row) {
 }
 
 function mergeCollected(rows) {
-  const known = new Set(collected.map(rowKey));
+  const known = new Map(collected.map(row => [rowKey(row), row]));
   let added = 0;
   for (const row of Array.isArray(rows) ? rows : []) {
     const key = rowKey(row);
-    if (!row?.review_text_raw || known.has(key)) continue;
-    known.add(key);
+    if (!row?.review_text_raw) continue;
+    if (known.has(key)) {
+      const existing = known.get(key);
+      if (Number(existing.image_count || 0) < Number(row.image_count || 0)) {
+        existing.image_count = Number(row.image_count || 0);
+        existing.review_images = Array.isArray(row.review_images) ? row.review_images : [];
+      }
+      continue;
+    }
+    known.set(key, row);
     collected.push(row);
     added++;
   }
@@ -91,7 +99,17 @@ function csvCell(value) {
   return `"${String(value ?? '').replaceAll('"', '""')}"`;
 }
 
-async function downloadResults() {
+async function startImagePackageExport(stamp, details) {
+  const pending = {stamp, details, retryCount: 0};
+  await chrome.storage.local.set({jdPendingImageExport: pending});
+  const tab = await chrome.tabs.create({
+    url: chrome.runtime.getURL('image_export.html'),
+    active: false
+  });
+  await chrome.storage.local.set({jdImageExportTabId: tab.id});
+}
+
+async function downloadResults(details) {
   const columns = ['platform', 'product_id', 'product_url', 'product_title', 'user_name_masked', 'rating', 'review_time', 'sku', 'review_text_raw'];
   const lines = [columns.join(','), ...collected.map(row => columns.map(key => csvCell(row[key])).join(','))];
   const stamp = new Date().toISOString().replaceAll(/[-:TZ.]/g, '').slice(0, 14);
@@ -101,21 +119,25 @@ async function downloadResults() {
     filename: `jd_reviews_${stamp}.csv`,
     saveAs: false
   });
+  await startImagePackageExport(stamp, details);
 }
 
 async function runNext() {
   await hydrateState();
   if (!queue.length) {
-    await downloadResults();
     const details = outcomes.map(item =>
       `${item.productId || item.url}：要求 ${item.requested}，实际 ${item.actual}` +
       (item.failed ? '（中途失败，已保存现有结果）' : item.actual < item.requested ? '（评论已到底，未达标）' : '')
     ).join('\n');
-    setStatus(`任务完成，共采集 ${collected.length} 条。\n${details}\nCSV 已开始下载。`);
+    const imageCount = collected.reduce((sum, row) => sum + Number(row.image_count || 0), 0);
+    setStatus(
+      `评论采集完成，共 ${collected.length} 条，识别评论图片 ${imageCount} 张。\n` +
+      `${details}\nECComment CSV 已开始下载，图片 ZIP 正在后台生成。`
+    );
+    await downloadResults(details);
     lastActivityAt = 0;
     await chrome.storage.local.remove([
       'jdQueue',
-      'jdCollected',
       'jdWorkerTabId',
       'jdOutcomes',
       'jdLastActivityAt'
@@ -196,10 +218,70 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'IMAGE_EXPORT_READY') {
+    (async () => {
+      const exportPageUrl = chrome.runtime.getURL('image_export.html');
+      if (!String(sender.url || '').startsWith(exportPageUrl)) {
+        sendResponse({error: '导出页面来源无效'});
+        return;
+      }
+      const saved = await chrome.storage.local.get(['jdPendingImageExport', 'jdCollected']);
+      if (!saved.jdPendingImageExport) {
+        sendResponse({error: '没有待处理的图片导出任务'});
+        return;
+      }
+      sendResponse({
+        ...saved.jdPendingImageExport,
+        rows: Array.isArray(saved.jdCollected) ? saved.jdCollected : []
+      });
+    })();
+    return true;
+  }
+  if (message.type === 'IMAGE_EXPORT_DONE') {
+    (async () => {
+      const saved = await chrome.storage.local.get('jdPendingImageExport');
+      const pending = saved.jdPendingImageExport || {};
+      await chrome.storage.local.remove([
+        'jdPendingImageExport', 'jdImageExportTabId', 'jdCollected'
+      ]);
+      setStatus(
+        `全部导出完成：ECComment CSV + 评论图片 ZIP。\n` +
+        `评论 ${message.reviewCount || 0} 条，图片成功 ${message.successCount || 0}/${message.imageCount || 0} 张。\n` +
+        `${pending.details || ''}`
+      );
+    })();
+    return;
+  }
+  if (message.type === 'IMAGE_EXPORT_FAILED') {
+    (async () => {
+      const saved = await chrome.storage.local.get('jdPendingImageExport');
+      const pending = saved.jdPendingImageExport;
+      await chrome.storage.local.remove('jdImageExportTabId');
+      if (pending && Number(pending.retryCount || 0) < 1) {
+        pending.retryCount = Number(pending.retryCount || 0) + 1;
+        await chrome.storage.local.set({jdPendingImageExport: pending});
+        setStatus(`图片包首次生成失败，正在自动重试：${message.error}`);
+        const tab = await chrome.tabs.create({
+          url: chrome.runtime.getURL('image_export.html'), active: false
+        });
+        await chrome.storage.local.set({jdImageExportTabId: tab.id});
+        return;
+      }
+      setStatus(
+        `ECComment CSV 已导出，但图片 ZIP 生成失败：${message.error}\n` +
+        `评论与图片索引仍保存在扩展检查点中，刷新扩展可再次尝试。`
+      );
+    })();
+    return;
+  }
   if (message.type === 'START_QUEUE') {
     (async () => {
       try {
         await hydrateState();
+        const pending = await chrome.storage.local.get('jdPendingImageExport');
+        if (pending.jdPendingImageExport) {
+          throw new Error('上一批图片包仍在生成，请等待图片 ZIP 下载完成后再开始新任务');
+        }
         queue = parseTargets(message.text);
         if (!queue.length) throw new Error('请至少输入一个商品');
         collected = [];
@@ -320,3 +402,23 @@ async function recoverUnfinishedQueue() {
 }
 
 recoverUnfinishedQueue();
+
+async function recoverPendingImageExport() {
+  const saved = await chrome.storage.local.get(['jdPendingImageExport', 'jdImageExportTabId']);
+  if (!saved.jdPendingImageExport) return;
+  if (Number.isInteger(saved.jdImageExportTabId)) {
+    try {
+      await chrome.tabs.get(saved.jdImageExportTabId);
+      return;
+    } catch (_) {
+      // The previous export page is gone; create a fresh one below.
+    }
+  }
+  setStatus('检测到未完成的评论图片包，正在继续生成。');
+  const tab = await chrome.tabs.create({
+    url: chrome.runtime.getURL('image_export.html'), active: false
+  });
+  await chrome.storage.local.set({jdImageExportTabId: tab.id});
+}
+
+recoverPendingImageExport();

@@ -61,10 +61,12 @@
     const user = textOf(card, ['.jdc-pc-rate-card-nick', '.nickname', '.user-info', '[class*="userInfo"]', '[class*="user-name"]']);
     const time = textOf(card, ['.date.list', '.comment-time', '[class*="commentTime"]', 'time']);
     const sku = textOf(card, ['.jdc-pc-rate-card-info.top .info', '.order-info', '[class*="product-info"]', '[class*="sku"]']);
+    const reviewImages = globalThis.JDReviewImages?.extract(card, url) || [];
     return {
       platform: 'jd', product_id: productId(), product_url: url,
       product_title: productTitle(),
-      user_name_masked: user, rating, review_time: time, sku, review_text_raw: text
+      user_name_masked: user, rating, review_time: time, sku, review_text_raw: text,
+      image_count: reviewImages.length, review_images: reviewImages
     };
   }
 
@@ -111,6 +113,9 @@
     const seen = new Set(rows.map(row =>
       [row.user_name_masked, row.review_time, row.sku, row.review_text_raw].join('|')
     ));
+    const rowByKey = new Map(rows.map(row => [
+      [row.user_name_masked, row.review_time, row.sku, row.review_text_raw].join('|'), row
+    ]));
     let stale = 0;
     let bottomWithoutNew = 0;
     while (rows.length < target.count && stale < 10 && bottomWithoutNew < 3) {
@@ -122,7 +127,15 @@
         if (row.review_text_raw && !seen.has(key)) {
           seen.add(key);
           rows.push(row);
+          rowByKey.set(key, row);
           added.push(row);
+        } else if (row.review_text_raw && row.review_images?.length) {
+          const existing = rowByKey.get(key);
+          if (existing && Number(existing.image_count || 0) < row.review_images.length) {
+            existing.image_count = row.review_images.length;
+            existing.review_images = row.review_images;
+            added.push(row);
+          }
         }
         if (rows.length >= target.count) break;
       }

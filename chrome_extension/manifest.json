@@ -1,16 +1,16 @@
 {
   "manifest_version": 3,
   "name": "京东评论采集器",
-  "version": "0.1.4",
-  "description": "在日常 Chrome 登录会话中采集京东最新商品评价",
+  "version": "0.2.0",
+  "description": "在日常 Chrome 登录会话中采集京东最新商品评价与评论图片",
   "permissions": ["storage", "tabs", "downloads", "alarms"],
-  "host_permissions": ["https://item.jd.com/*"],
+  "host_permissions": ["https://item.jd.com/*", "https://*.360buyimg.com/*"],
   "background": {"service_worker": "service_worker.js"},
   "action": {"default_popup": "popup.html", "default_title": "京东评论采集器"},
   "content_scripts": [
     {
       "matches": ["https://item.jd.com/*"],
-      "js": ["content.js"],
+      "js": ["review_images.js", "content.js"],
       "run_at": "document_idle"
     }
   ]

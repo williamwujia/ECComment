@@ -75,6 +75,19 @@ def test_review_rate_must_be_valid() -> None:
         raise AssertionError("zero review rate should be rejected")
 
 
+def test_custom_review_rate_recalculates_estimated_sales() -> None:
+    history = build_sales_history(
+        sample_content(),
+        pd.DataFrame(),
+        review_rate=0.10,
+    )
+    p1 = history[history["item_key"].eq("p1")].set_index("sales_month")
+
+    assert p1.loc["2026-06", "estimated_sales"] == 20
+    assert p1.loc["2026-07", "estimated_sales"] == 30
+    assert p1.loc["2026-07", "sales_change"] == 0.5
+
+
 def test_product_name_marks_jd_platform_from_item_key() -> None:
     content = pd.DataFrame(
         [
