@@ -36,6 +36,13 @@ from ui.tracker_metrics import (
     build_sentiment_metrics,
     sentiment_series,
 )
+from ui.sales_progress import (
+    DEFAULT_REVIEW_RATE,
+    build_latest_sales_progress,
+    build_sales_history,
+    sales_date_coverage,
+)
+from ui.update_reminders import platform_display_name, stale_sku_updates
 
 
 if __name__ == "__main__":
@@ -46,6 +53,7 @@ if __name__ == "__main__":
 
 BRAND_PAGES = [
     "品牌总览",
+    "销售进展",
     "评论洞察",
     "购前评论",
     "AI 影响",
@@ -64,6 +72,7 @@ MAINTENANCE_PAGES = [
 ]
 NEW_PROJECT_OPTION = "__new_project__"
 PROJECTS_DIRECTORY = Path("projects")
+SALES_REVIEW_RATE_SESSION_KEY = "sales_review_rate_percent"
 
 
 @st.cache_data(show_spinner=False)
@@ -132,6 +141,7 @@ def main() -> None:
         project_ids,
         format_func=lambda value: project_display_name(sheets, value),
     )
+    render_stale_sku_reminder(sheets, project_id)
     pages = MAINTENANCE_PAGES if maintenance else BRAND_PAGES
     page = st.sidebar.radio("页面", pages)
     if maintenance:
@@ -142,6 +152,8 @@ def main() -> None:
 
     if page == "品牌总览":
         render_brand_overview(sheets, project_id)
+    elif page == "销售进展":
+        render_sales_progress(sheets, project_id)
     elif page == "评论洞察":
         render_brand_reviews(sheets, project_id)
     elif page == "购前评论":
@@ -344,6 +356,17 @@ def render_brand_overview(
         "来源口径：前三项仅统计淘宝/天猫；全部内容包含所有已导入来源。"
         f" 全部内容来源分布：{source_breakdown or '暂无内容'}。"
     )
+
+    review_rate = current_sales_review_rate()
+    history = sales_history_frame(sheets, project_id, review_rate=review_rate)
+    latest = build_latest_sales_progress(history)
+    if not latest.empty:
+        latest_sales = int(latest["estimated_sales"].sum())
+        st.info(
+            f"销售进展提示：按 {review_rate:.0%} 评论率估算，"
+            "各商品最近有数据月份"
+            f"合计约 {latest_sales:,} 单。可在“销售进展”查看按月变化。"
+        )
 
     evidence = overview["evidence_counts"]
     funnel_summary = {
@@ -935,6 +958,121 @@ def render_brand_products(
     st.dataframe(shown[columns], width="stretch", hide_index=True)
 
 
+def render_sales_progress(
+    sheets: dict[str, pd.DataFrame],
+    project_id: str,
+) -> None:
+    st.title("销售进展")
+    default_percent = int(DEFAULT_REVIEW_RATE * 100)
+    review_rate_percent = st.slider(
+        "预计评论率",
+        min_value=1,
+        max_value=30,
+        value=default_percent,
+        step=1,
+        format="%d%%",
+        key=SALES_REVIEW_RATE_SESSION_KEY,
+        help="假设每 100 位购买客户中有多少位会留下主评论。",
+    )
+    review_rate = review_rate_percent / 100
+    st.caption(
+        f"按评论自身日期统计自然月评论数，并假设 {review_rate_percent}% "
+        "的客户会评论：估算销量 = 评论数 ÷ 预计评论率。"
+        "这是模型估算，不是平台真实订单数据；评论可能晚于购买发生，"
+        "未结束月份仅代表截至当前已采集的评论。"
+    )
+    content = project_frame(
+        sheets.get("content_master", pd.DataFrame()), project_id
+    )
+    history = sales_history_frame(sheets, project_id, review_rate=review_rate)
+    coverage = sales_date_coverage(content)
+    if history.empty:
+        st.info("当前没有带有效评论日期的主评论，暂时无法估算销量变化。")
+        return
+
+    latest = build_latest_sales_progress(history)
+    latest_period = history["sales_month"].max()
+    period_rows = history[history["sales_month"].eq(latest_period)]
+    metrics = st.columns(4)
+    metrics[0].metric("最近月份", latest_period)
+    metrics[1].metric("当月评论", f"{int(period_rows['review_count'].sum()):,}")
+    metrics[2].metric(
+        "当月估算销量",
+        f"约 {int(period_rows['estimated_sales'].sum()):,} 单",
+    )
+    metrics[3].metric("评论日期覆盖率", f"{coverage['coverage']:.1%}")
+    if coverage["undated_reviews"]:
+        st.warning(
+            f"有 {coverage['undated_reviews']:,} 条主评论缺少有效日期，"
+            "未计入月度销量估算。"
+        )
+
+    chart_rows = history.copy()
+    chart_rows["商品"] = chart_rows["product_display_name"]
+    chart = px.line(
+        chart_rows,
+        x="sales_month",
+        y="estimated_sales",
+        color="商品",
+        markers=True,
+        labels={"sales_month": "评论月份", "estimated_sales": "估算销量"},
+    )
+    chart.update_layout(
+        yaxis_title=f"估算销量（单，按 {review_rate_percent}% 评论率）"
+    )
+    st.plotly_chart(chart, width="stretch")
+
+    shown = latest.copy()
+    shown["商品"] = shown["product_display_name"]
+    shown["环比变化"] = shown["sales_change"].map(
+        lambda value: "暂无" if pd.isna(value) else f"{float(value):+.1%}"
+    )
+    st.dataframe(
+        shown[
+            [
+                "商品",
+                "sales_month",
+                "trend",
+                "review_count",
+                "estimated_sales",
+                "环比变化",
+            ]
+        ].rename(
+            columns={
+                "sales_month": "最近有数据月份",
+                "trend": "销量变化",
+                "review_count": "当月评论",
+                "estimated_sales": "估算销量（单）",
+            }
+        ),
+        width="stretch",
+        hide_index=True,
+    )
+
+
+def sales_history_frame(
+    sheets: dict[str, pd.DataFrame],
+    project_id: str,
+    *,
+    review_rate: float | None = None,
+) -> pd.DataFrame:
+    return build_sales_history(
+        project_frame(sheets.get("content_master", pd.DataFrame()), project_id),
+        project_frame(sheets.get("products", pd.DataFrame()), project_id),
+        review_rate=(
+            review_rate if review_rate is not None else DEFAULT_REVIEW_RATE
+        ),
+    )
+
+
+def current_sales_review_rate() -> float:
+    percent = st.session_state.get(
+        SALES_REVIEW_RATE_SESSION_KEY,
+        int(DEFAULT_REVIEW_RATE * 100),
+    )
+    return float(percent) / 100
+
+
 def render_brand_guide() -> None:
     st.title("看板说明")
     st.markdown(
@@ -942,6 +1080,7 @@ def render_brand_guide() -> None:
 这个入口面向品牌侧查看者，只负责查看和导出，不承担数据更新。
 
 - **品牌总览**：查看评论、问大家、情绪分类和 AI 影响 A–D 分级。
+- **销售进展**：按评论日期统计月度评论数，并通过评论率滑块估算销量及环比变化；默认评论率为 5%。
 - **评论洞察**：按商品、情绪和 AI 等级筛选评论，查看表扬点与抱怨点。
 - **购前评论**：单独查看消费者买前的比较、选择、顾虑和决策证据。
 - **AI 影响**：查看逐月三色趋势，并集中查看 A–D 各级证据及对应原文。
@@ -981,6 +1120,42 @@ def render_maintenance_quality(
     cards[2].metric("警告或失败", f"{warning_count:,}")
     cards[3].metric("待复核", f"{unresolved_count(queue):,}")
     render_history(sheets, project_id, show_title=False)
+
+
+def render_stale_sku_reminder(
+    sheets: dict[str, pd.DataFrame],
+    project_id: str,
+) -> None:
+    stale_items = stale_sku_updates(
+        project_frame(sheets.get("products", pd.DataFrame()), project_id),
+        project_frame(sheets.get("snapshots", pd.DataFrame()), project_id),
+    )
+    if stale_items.empty:
+        return
+
+    st.warning(f"更新提醒：本项目有 {len(stale_items)} 条待更新记录。")
+    with st.expander("查看待更新 SKU", expanded=False):
+        display = stale_items.copy()
+        display["platform"] = display["platform"].map(platform_display_name)
+        display["last_update_at"] = display["last_update_at"].map(
+            lambda value: "暂无更新记录"
+            if pd.isna(value)
+            else value.strftime("%Y-%m-%d %H:%M")
+        )
+        display["days_since_update"] = display["days_since_update"].map(
+            lambda value: "暂无记录" if pd.isna(value) else f"{value} 天"
+        )
+        show_table(
+            display,
+            columns=[
+                "platform",
+                "sku",
+                "product_title_current",
+                "last_update_at",
+                "days_since_update",
+            ],
+            height=min(320, 48 * (len(display) + 1)),
+        )
 
 
 def render_project_home(

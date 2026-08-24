@@ -71,6 +71,9 @@ const chrome = {
     }
   },
   runtime: {
+    getURL(path) {
+      return `chrome-extension://test/${path}`;
+    },
     onMessage: {
       addListener(listener) {
         listeners.message = listener;
@@ -104,6 +107,15 @@ const source = fs.readFileSync(
 vm.runInContext(source, context);
 await new Promise(resolve => setImmediate(resolve));
 
+const mergedImageCount = vm.runInContext(`
+  mergeCollected([{
+    product_id: '100', product_url: '${firstUrl}', review_text_raw: '已经保存的评论',
+    image_count: 1, review_images: [{source_url: 'https://img30.360buyimg.com/a.jpg'}]
+  }]);
+  collected[0].image_count;
+`, context);
+assert.equal(mergedImageCount, 1);
+
 await vm.runInContext('startScrapeWithRetry(7, queue[0])', context);
 
 assert.equal(storage.jdQueue.length, 1);
@@ -116,5 +128,18 @@ assert.deepEqual(calls.at(-1), ['update', secondUrl]);
 
 await vm.runInContext('runNext()', context);
 assert.deepEqual(calls.at(-1), ['reload', secondUrl]);
+
+await vm.runInContext(`
+  queue = [];
+  collected = [{
+    platform: 'jd', product_id: '200', product_url: '${secondUrl}',
+    review_text_raw: '带图片的评论', image_count: 1,
+    review_images: [{source_url: 'data:image/png;base64,AQID'}]
+  }];
+  runNext();
+`, context);
+assert.equal(storage.jdCollected.length, 1);
+assert.ok(storage.jdPendingImageExport);
+assert.equal(calls.filter(call => call[0] === 'download').length, 1);
 
 console.log('JD extension recovery tests passed');
