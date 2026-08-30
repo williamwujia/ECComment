@@ -1,0 +1,18 @@
+[Unit]
+Description=WeChat official-account callback service
+After=network-online.target
+
+[Service]
+Type=simple
+User=tmallcomment
+Group=tmallcomment
+WorkingDirectory=/opt/tmall-comment
+EnvironmentFile=/etc/tmall-comment/wechat-sales.env
+ExecStart=/opt/tmall-comment/.venv-wechat/bin/python -m uvicorn wechat_sales.app:app --host 127.0.0.1 --port 8511
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+
+[Install]
+WantedBy=multi-user.target

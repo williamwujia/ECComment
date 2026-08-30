@@ -1,6 +1,6 @@
 # 项目状态（唯一当前入口）
 
-最后核对：2026-08-24
+最后核对：2026-08-31
 当前分支：`codex/ecommerce-review-assistant`
 
 > 开始任何修改前先读本页。这里描述“现在是什么样”，历史变化见 `CHANGELOG.md`，重要取舍见 `docs/DECISIONS.md`。
@@ -24,10 +24,14 @@
 - 销售进展中的商品名称带有天猫、淘宝或京东平台标识。
 - 侧栏会提醒超过 14 天未更新或尚无快照的 SKU。
 - Windows 启动器会在默认端口 8501 被占用时自动递增到下一个可用端口。
+- 已配置 GitHub Spec Kit 的 Codex 工作流；项目级模板、PowerShell 脚本与项目原则位于 `.specify/`，可从 `$speckit-constitution` 开始。
+- 微信服务已具备独立的公众号回调与 ECComment 最小接入：`GET /wechat/callback` 保持现有签名验证；`POST /wechat/callback` 保持公众号明文与 AES 安全模式收发流程。文本包含 `e.tb.cn`、`item.taobao.com` 或 `detail.tmall.com` 时调用 ECComment 并返回整理后的估算结果；其他文本提示“请发送淘宝商品链接”，下游失败统一提示稍后重试并记录错误日志。内置的 `POST /api/sales/estimate` 从现有项目工作簿只读查询淘宝/天猫商品，复用 D-003 的 5% 评论率月销量口径，仅供同机回环调用并使用独立 Bearer Token 鉴权。当前不接 AI、数据库、用户系统或企业微信。
+- 生产域名 `hexinmarketing.com` 已启用 Let’s Encrypt HTTPS 和自动续期；微信公众号回调以独立虚拟环境和 systemd 服务运行在 `127.0.0.1:8511`，公网精确路由为 `https://hexinmarketing.com/wechat/callback`。2026-08-31 已按公众号实际 AES 安全模式部署文本被动回复，完整公网加密协议测试通过，并由真实普通微信用户确认发送 `TEST-001` 后收到“收到 TEST-001”。
 
 ## 进行中（尚未提交）
 
-- 当前没有已登记的未完成实现。
+- `specs/001-wechat-sales-lookup/` 中带数据库、每日限额和企业微信异步链路的完整设计暂缓实施，不属于当前微信公众号直连 ECComment 的范围。
+- 内置 ECComment 接口已在本地完成代码与契约测试，尚未同步到生产服务器；生产配置需生成独立服务令牌并设置回环 URL 与项目工作簿目录。
 
 ## 已知风险与待核对
 

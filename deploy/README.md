@@ -57,3 +57,58 @@ sudo ufw status numbered
 If the provider has a cloud security group, remove its inbound `8501/tcp` rule there too. Verify from a machine outside the server network that `http://SERVER_IP:8501/` cannot connect, while `http://SERVER_IP/TmallComment/_stcore/health` returns `ok`.
 
 `tmall-comment.service` starts with `--server.maxUploadSize=20`; the application additionally limits total upload size, archive expansion, CSV rows, update frequency, and concurrent updates.
+
+## WeChat callback service
+
+The WeChat callback is a separate FastAPI/Uvicorn process on
+`127.0.0.1:8511`. It does not change the Streamlit process or its
+`/TmallComment/` route.
+
+1. Create the isolated `/opt/tmall-comment/.venv-wechat` environment and
+   install `requirements-wechat.txt` into it. This keeps callback dependencies
+   out of the Streamlit environment.
+2. Create `/etc/tmall-comment/wechat-sales.env` with mode `0640`, owned by
+   `root:tmallcomment`, and set `WECHAT_TOKEN`. For safe mode, also set the
+   official account's `WECHAT_APP_ID` and `WECHAT_ENCODING_AES_KEY`. AppSecret
+   is not needed. Set `ECCOMMENT_ESTIMATE_URL` to the built-in loopback endpoint
+   `http://127.0.0.1:8511/api/sales/estimate`, set `ECCOMMENT_PROJECTS_DIR` to
+   `/opt/tmall-comment/projects`, and generate one private service token with
+   `openssl rand -hex 32` for `ECCOMMENT_ESTIMATE_TOKEN`. The caller and endpoint
+   use the same environment value; it is not a WeChat or model-provider token.
+   Never put real credentials in the repository or unit file.
+3. Install `deploy/systemd/wechat-sales.service` as
+   `/etc/systemd/system/wechat-sales.service`.
+4. Include `deploy/nginx/wechat-sales-location.conf` inside the existing HTTPS
+   `server {}` block. Do not replace that block or the `/TmallComment/`
+   locations.
+5. Validate and restart only the new service and Nginx configuration:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now wechat-sales.service
+sudo systemctl restart wechat-sales.service
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+Local health check: `curl http://127.0.0.1:8511/health`. For a signed GET test,
+generate the signature outside shell history or logs and send
+`signature`, `timestamp`, `nonce`, and `echostr` as query parameters. Invalid
+signatures must return `403`; POST currently logs request metadata and returns
+the standard passive-reply XML for a signed official-account text message. A
+plaintext callback uses `signature`; a safe-mode callback uses
+`encrypt_type=aes`, `msg_signature`, and an XML `Encrypt` envelope. In both
+modes, text containing `e.tb.cn`, `item.taobao.com`, or `detail.tmall.com` is
+sent to the configured ECComment endpoint and formatted into a WeChat reply.
+Other text replies with `请发送淘宝商品链接`; ECComment failures reply with
+`查询失败，请稍后重试`. Non-text messages return `200 success`. The synchronous
+callback does not use AI, a database, a user system, or WeCom. Keep the
+ECComment timeout below WeChat's passive-reply deadline.
+
+The built-in `POST /api/sales/estimate` endpoint is intentionally not included
+in Nginx. The callback reaches it over loopback, authenticated with the bearer
+token above. It reads top-level project workbooks without modifying them, uses
+the existing 5% review-rate calculation, and returns the most recent month that
+has dated primary reviews. The workbook catalog is warmed during service startup
+so the first WeChat query does not pay Excel loading time. Restart
+`wechat-sales.service` after dependencies or environment values change.

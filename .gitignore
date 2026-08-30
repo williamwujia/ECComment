@@ -29,3 +29,6 @@ config/secrets/*
 .venv/
 .venv.broken-*/
 venv/
+
+# Local WeChat callback deployment configuration.
+config/wechat_sales.env
