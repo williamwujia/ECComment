@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <style>
+    body { font: 14px/1.5 system-ui, sans-serif; width: 460px; padding: 14px; color: #222; }
+    textarea { box-sizing: border-box; width: 100%; height: 170px; padding: 8px; resize: vertical; }
+    button { margin: 10px 8px 0 0; padding: 8px 16px; border: 0; color: white; border-radius: 5px; cursor: pointer; }
+    #start { background: #1677ff; }
+    #current { background: #7c3aed; }
+    #resume { background: #0a8f55; }
+    #cancel { background: #777; }
+    #status { margin-top: 12px; white-space: pre-wrap; color: #444; max-height: 210px; overflow: auto; }
+    .hint { margin: 6px 0 10px; color: #666; }
+    .warning { margin-top: 8px; color: #a05a00; }
+  </style>
+</head>
+<body>
+  <strong>淘宝 / 天猫 / 京东最新评价采集</strong>
+  <div class="hint">每行填写“商品 URL,数量”。建议每 7 天运行一次；首次每个商品先采集 100–300 条。</div>
+  <textarea id="targets" placeholder="https://detail.tmall.com/item.htm?id=123456789,200&#10;https://item.taobao.com/item.htm?id=987654321,200&#10;https://item.jd.com/13745188.html,200"></textarea>
+  <div>
+    <button id="start">开始新任务</button>
+    <button id="current">采集当前商品页</button>
+    <button id="resume">登录后继续</button>
+    <button id="cancel">取消任务</button>
+  </div>
+  <div class="warning">遇到登录页会暂停。若天猫直开的页面没有评论区，请先正常打开带“查看全部评价”的商品页，再点“采集当前商品页”。</div>
+  <div id="status"></div>
+  <script src="popup.js"></script>
+</body>
+</html>
