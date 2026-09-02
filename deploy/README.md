@@ -23,6 +23,19 @@ sudo systemctl enable --now tmall-comment.service
 sudo systemctl status tmall-comment.service --no-pager
 ```
 
+If project workbooks are later copied as `root`, restore the service ownership and
+minimum permissions before restarting either application. One unreadable workbook
+prevents the WeChat estimate catalog from being built:
+
+```bash
+sudo chown tmallcomment:tmallcomment /opt/tmall-comment/projects
+sudo chmod 0750 /opt/tmall-comment/projects
+sudo find /opt/tmall-comment/projects -maxdepth 1 -type f -name '*.xlsx' -exec chown tmallcomment:tmallcomment {} + -exec chmod 0640 {} +
+cd /tmp && sudo -u tmallcomment find /opt/tmall-comment/projects -maxdepth 1 -type f -name '*.xlsx' ! -readable -print
+```
+
+The last command must produce no workbook paths.
+
 Create `/etc/tmall-comment/tmall-comment.env` with mode `0640`, owned by `root:tmallcomment`. Put secrets there or point `DEEPSEEK_API_KEY_FILE` at a root-owned, group-readable key file outside the checkout. Example non-secret limits:
 
 ```ini
