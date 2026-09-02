@@ -254,8 +254,12 @@ async def estimate_sales(request: Request) -> JSONResponse:
         return JSONResponse({"status": "error", "error": "invalid_request"}, status_code=400)
     try:
         result = await configured_catalog().estimate(query)
-    except EstimateUnavailable:
-        logger.info("ECComment estimate unavailable request_id=%s", _safe_log_value(request_id))
+    except EstimateUnavailable as exc:
+        logger.info(
+            "ECComment estimate unavailable request_id=%s reason=%s",
+            _safe_log_value(request_id),
+            _safe_log_value(str(exc)),
+        )
         return JSONResponse({"status": "error", "error": "unavailable"})
     except Exception:
         logger.exception("ECComment estimate failed request_id=%s", _safe_log_value(request_id))

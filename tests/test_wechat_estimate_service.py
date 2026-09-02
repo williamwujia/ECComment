@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 
 import pandas as pd
+import pytest
 from fastapi.testclient import TestClient
 
 from wechat_sales import estimate_service
@@ -12,7 +13,7 @@ from wechat_sales.app import app
 client = TestClient(app)
 
 
-def _write_project_workbook(path):
+def _write_project_workbook(path, *, product_title="测试护眼灯"):
     products = pd.DataFrame(
         [
             {
@@ -20,7 +21,7 @@ def _write_project_workbook(path):
                 "item_key": "tmall:123456789",
                 "platform": "tmall",
                 "platform_product_id": "123456789",
-                "product_title_current": "测试护眼灯",
+                "product_title_current": product_title,
                 "last_updated_at": "2026-08-31 10:00:00",
             }
         ]
@@ -94,6 +95,75 @@ def test_resolve_direct_tmall_product_reference():
     )
 
     assert result == ("tmall", "123456789")
+
+
+def test_catalog_uses_unique_full_title_when_short_link_cannot_be_resolved(
+    tmp_path, monkeypatch
+):
+    product_title = "测试儿童阅读学习专用护眼台灯"
+    _write_project_workbook(tmp_path / "project.xlsx", product_title=product_title)
+    catalog = estimate_service.EstimateCatalog(tmp_path)
+
+    async def blocked_short_link(_query):
+        raise estimate_service.EstimateUnavailable(
+            "Taobao short link did not identify a product"
+        )
+
+    monkeypatch.setattr(
+        estimate_service, "resolve_product_reference", blocked_short_link
+    )
+
+    result = asyncio.run(
+        catalog.estimate(
+            "【淘宝】假一赔四 https://e.tb.cn/h.test "
+            f"「{product_title}」 点击链接直接打开"
+        )
+    )
+
+    assert result["product_name"] == product_title
+    assert result["estimated_sales"] == 20
+
+
+def test_catalog_rejects_ambiguous_full_title_fallback(tmp_path, monkeypatch):
+    product_title = "测试儿童阅读学习专用护眼台灯"
+    _write_project_workbook(tmp_path / "first.xlsx", product_title=product_title)
+    _write_project_workbook(tmp_path / "second.xlsx", product_title=product_title)
+    products = pd.read_excel(tmp_path / "second.xlsx", sheet_name="products")
+    content = pd.read_excel(tmp_path / "second.xlsx", sheet_name="content_master")
+    snapshots = pd.read_excel(tmp_path / "second.xlsx", sheet_name="snapshots")
+    products["item_key"] = "tmall:987654321"
+    products["platform_product_id"] = "987654321"
+    content["item_key"] = "tmall:987654321"
+    snapshots["item_key"] = "tmall:987654321"
+    with pd.ExcelWriter(tmp_path / "second.xlsx", engine="openpyxl") as writer:
+        products.to_excel(writer, sheet_name="products", index=False)
+        content.to_excel(writer, sheet_name="content_master", index=False)
+        snapshots.to_excel(writer, sheet_name="snapshots", index=False)
+    catalog = estimate_service.EstimateCatalog(tmp_path)
+
+    async def blocked_short_link(_query):
+        raise estimate_service.EstimateUnavailable("short link blocked")
+
+    monkeypatch.setattr(
+        estimate_service, "resolve_product_reference", blocked_short_link
+    )
+
+    with pytest.raises(estimate_service.EstimateUnavailable):
+        asyncio.run(catalog.estimate(f"https://e.tb.cn/h.test 「{product_title}」"))
+
+
+def test_catalog_does_not_use_title_fallback_without_short_link(tmp_path, monkeypatch):
+    product_title = "测试儿童阅读学习专用护眼台灯"
+    _write_project_workbook(tmp_path / "project.xlsx", product_title=product_title)
+    catalog = estimate_service.EstimateCatalog(tmp_path)
+
+    async def missing_link(_query):
+        raise estimate_service.EstimateUnavailable("No supported product link")
+
+    monkeypatch.setattr(estimate_service, "resolve_product_reference", missing_link)
+
+    with pytest.raises(estimate_service.EstimateUnavailable):
+        asyncio.run(catalog.estimate(product_title))
 
 
 def test_estimate_endpoint_requires_bearer_token(monkeypatch):

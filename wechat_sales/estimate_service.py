@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import unicodedata
 from dataclasses import asdict, dataclass
 from datetime import date
 from pathlib import Path
@@ -54,6 +55,35 @@ def _clean_text(value: object) -> str:
     if value is None or pd.isna(value):
         return ""
     return str(value).strip()
+
+
+def _normalized_product_text(value: object) -> str:
+    """Normalize share-copy and catalog titles for strict containment matching."""
+
+    normalized = unicodedata.normalize("NFKC", _clean_text(value)).casefold()
+    return "".join(char for char in normalized if char.isalnum())
+
+
+def _unique_catalog_title_match(
+    query: str,
+    records: dict[tuple[str, str], "EstimateRecord"],
+) -> "EstimateRecord | None":
+    """Return a catalog item only when the full title identifies one product id."""
+
+    normalized_query = _normalized_product_text(query)
+    matches = [
+        (key, record)
+        for key, record in records.items()
+        if len(_normalized_product_text(record.product_name)) >= 8
+        and _normalized_product_text(record.product_name) in normalized_query
+    ]
+    product_ids = {key[1] for key, _ in matches}
+    if len(product_ids) != 1:
+        return None
+    return max(
+        (record for _, record in matches),
+        key=lambda record: (record.data_date, record.source_mtime_ns),
+    )
 
 
 def _date_text(value: object) -> str:
@@ -188,6 +218,14 @@ def _direct_reference(url: str) -> tuple[str, str] | None:
     return None
 
 
+def _contains_taobao_short_link(query: str) -> bool:
+    match = SUPPORTED_URL_PATTERN.search(query)
+    return bool(
+        match
+        and (urlsplit(match.group(0)).hostname or "").casefold() == "e.tb.cn"
+    )
+
+
 async def resolve_product_reference(query: str) -> tuple[str, str]:
     match = SUPPORTED_URL_PATTERN.search(query)
     if not match:
@@ -252,11 +290,16 @@ class EstimateCatalog:
             self._signature = signature
 
     async def estimate(self, query: str) -> dict[str, object]:
-        platform, product_id = await resolve_product_reference(query)
+        resolution_error: EstimateUnavailable | None = None
+        try:
+            platform, product_id = await resolve_product_reference(query)
+        except EstimateUnavailable as exc:
+            resolution_error = exc
+            platform, product_id = "", ""
         await asyncio.to_thread(self.refresh_if_needed)
         with self._lock:
-            record = self._records.get((platform, product_id))
-            if record is None:
+            record = self._records.get((platform, product_id)) if product_id else None
+            if record is None and product_id:
                 # Some Taobao shares resolve to a neutral domain while the tracked item is
                 # recorded as Tmall. A unique cross-platform product id remains safe to use.
                 matches = [
@@ -266,7 +309,20 @@ class EstimateCatalog:
                 ]
                 if len(matches) == 1:
                     record = matches[0]
+            if (
+                record is None
+                and resolution_error is not None
+                and _contains_taobao_short_link(query)
+            ):
+                # Taobao can return a bot-check page to data-centre IPs instead of the
+                # share landing page. Standard WeChat share copy includes the full product
+                # title, so a unique exact catalog-title match is a safe offline fallback.
+                record = _unique_catalog_title_match(query, self._records)
             if record is None:
+                if resolution_error is not None:
+                    raise EstimateUnavailable(
+                        f"{resolution_error}; no unique product title in ECComment data"
+                    ) from resolution_error
                 raise EstimateUnavailable("Product is not present in ECComment data")
             return record.response()
 
